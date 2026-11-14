@@ -16,6 +16,9 @@ source of truth for the interfaces.
 
 - English for code, comments and commits.
 - A test comes with the code it guards, and fails without it.
+- Update `plan/progress.md` in the documentation repository in the same
+  change as the work: the colour of the box, the "Now" table, the date. Moving
+  a box is part of "done".
 - A component gets only the capabilities it is handed; nothing is ambient.
 
 ## Ask first
