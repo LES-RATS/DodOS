@@ -21,6 +21,15 @@ source of truth for the interfaces.
   a box is part of "done".
 - A component gets only the capabilities it is handed; nothing is ambient.
 
+## Rust style
+
+- Propagate errors with `?`; no hand-written `match` that only returns the
+  error.
+- One test per behaviour, named after the behaviour.
+- An enum instead of a `bool` parameter; no glob import (`use x::*`) outside
+  tests; no `Rc` or `Arc` unless ownership is really shared. (These three are
+  taken from the Google Rust style guide.)
+
 ## Ask first
 
 - Any change to `contracts/`: a contract is re-read by the two humans, and a
