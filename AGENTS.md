@@ -21,14 +21,12 @@ source of truth for the interfaces.
   a box is part of "done".
 - A component gets only the capabilities it is handed; nothing is ambient.
 
-## Rust style
+## Rust
 
-- Propagate errors with `?`; no hand-written `match` that only returns the
-  error.
-- One test per behaviour, named after the behaviour.
-- An enum instead of a `bool` parameter; no glob import (`use x::*`) outside
-  tests; no `Rc` or `Arc` unless ownership is really shared. (These three are
-  taken from the Google Rust style guide.)
+Skills are in `.agents/skills/`. The rules are in the skill `dodos-rust`
+(style, tests, lints, what CI runs), the same file as in the kernel
+repository. `rust-1-100` lists what changed in Rust 1.97 to 1.100. Read both
+before writing Rust.
 
 ## Ask first
 
