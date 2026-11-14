@@ -1,0 +1,7 @@
+#!/bin/sh
+# The single verification command, identical locally and in CI.
+set -eu
+cd "$(dirname "$0")"
+# The WIT contracts must parse and resolve as one set of packages.
+wasm-tools component wit contracts/ >/dev/null
+echo "contracts: $(ls contracts/*.wit | wc -l | tr -d ' ') WIT files checked"
