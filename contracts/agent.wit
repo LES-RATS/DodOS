@@ -87,7 +87,8 @@ interface inference {
     messages: list<message>,
     /// Actions the model may propose, from the task's scope. The system
     /// adds their names, descriptions and schemas from the manifests itself;
-    /// this marks the task as `available` does.
+    /// this marks the task as `available` does. A ref outside the task's
+    /// scope makes the call answer `denied`.
     tools: list<action-ref>,
     /// Constrains the output to this JSON Schema (the manifest's subset),
     /// for example an interface tree; none for free text.
@@ -132,6 +133,7 @@ interface inference {
   /// The decision tier: ranks `candidates` (actions of the scope that the
   /// agent pre-selected by its own matching, at most 64) for the user's
   /// `words`, fills each input to its schema, and returns at most `limit`.
+  /// A ref outside the task's scope makes the call answer `denied`.
   choose: async func(scope: borrow<task>, words: string, candidates: list<action-ref>, limit: u32) -> result<choices, error>;
 }
 
@@ -166,6 +168,12 @@ interface memory {
     /// injected once stays untrusted.
     provenance: provenance,
   }
+
+  // Each call of `remember` and `forget` is an entry of the task's journal,
+  // as an action of the system's memory service of change `reversible`,
+  // reach `local`: `task.undo` forgets the new entry (and restores the
+  // replaced entry if `replaces` was set), or restores the forgotten one
+  // until the retention period has passed.
 
   /// Appends an entry and returns its id.
   remember: async func(scope: borrow<task>, text: string, about: list<object-id>, replaces: option<string>) -> result<string, error>;
@@ -231,10 +239,9 @@ interface audio {
 ///              `external`)
 ///   waiting    a confirmation is pending
 ///   stopped    the task was refused, cancelled or revoked
-///   idle       none of the above, the task done
-/// The agent adds only what the system cannot know, as a `hint`, drawn only
-/// while no system state applies: it can neither hide a system state nor
-/// show one.
+/// When none of these applies, the figure shows the agent's `hint`, or idle
+/// without one. The hint adds only what the system cannot know: it can
+/// neither hide a system state nor show one.
 interface entity {
   use types.{error};
 
@@ -243,7 +250,9 @@ interface entity {
   /// record). none clears it.
   enum hint { none, asking, done, failed }
 
-  /// The last call wins; the hint ends with the task.
+  /// The last call wins. `done` and `failed` stay drawn after `handle`
+  /// returns, until the next request of this instance or the overlay
+  /// closes; `asking` and `none` end with the task.
   set: async func(hint: hint) -> result<_, error>;
 }
 
@@ -291,7 +300,8 @@ interface accessibility {
   record page { nodes: list<a11y-node>, generation: u64, more: bool }
 
   resource accessible {
-    /// The title is the owner's text: reading it marks as `read` does.
+    /// The title is the owner's text, set by `ui.surface.set-title`, at most
+    /// 256 bytes: reading it marks as `read` does.
     info: async func() -> result<surface-info, error>;
 
     /// Nodes in depth-first order, after node `after`; limit <= 1024.

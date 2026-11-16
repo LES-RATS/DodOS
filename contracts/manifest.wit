@@ -30,9 +30,10 @@
 //       value encoding); the system attenuates the item to these rights and
 //       to the action's class
 //   "os-secret": true
-//       filled only from a secret field (os:catalog-agent `field`); shown
-//       masked in a confirmation, written as null in the journal, never sent
-//       to a model
+//       filled only from a secret field (os:catalog-agent `field`), and a
+//       secret field feeds no other property; an action that receives one
+//       is confirmed whatever its class (tasks.invoke); shown masked in the
+//       confirmation, written as null in the journal, never sent to a model
 // An input schema has "type": "object" at the root and "additionalProperties":
 // false at every object, so that a confirmation shows everything sent.
 // Anything else (remote $ref, $dynamicRef, if/then/else, not, allOf,
@@ -48,10 +49,13 @@
 //   refused     an action removed or renamed (a removal is a new package
 //               name); a required input added; an input property removed;
 //               an input constraint narrowed; a type changed; an output
-//               property removed or its values widened
+//               property removed or its values widened; "os-item" added to
+//               or removed from a property, or its kind changed; "os-secret"
+//               added or removed
 //   a new right a class raised (`none` to `reversible` or `irreversible`,
-//               `local` to `external`) or a host added: the user agrees
-//               again, as for any new right (D-056)
+//               `local` to `external`), a host added, or a right added to an
+//               "os-item": the user agrees again, as for any new right
+//               (D-056)
 
 package os:manifest@0.1.0 {
   interface format {
@@ -66,20 +70,36 @@ package os:manifest@0.1.0 {
     /// name: 1 to 64 bytes of [a-z0-9.-].
     record named-blob { name: string, blob: blob-ref }
 
-    /// A right the package asks for. Names known in this version (an
-    /// unknown name makes the installer refuse the package, rather than run
-    /// it without a right it expects):
-    ///   "network"             wasi:sockets and wasi:http for the long-lived
-    ///                         instance; scope: the hosts, empty for any
-    ///   "background"          woken without a surface (D-053)
-    ///   "audio-playback", "microphone", "audio-capture"
-    ///                         three distinct rights (ui.md)
-    ///   "accessibility-read"  read other surfaces' trees (assistive tools)
-    ///   "global-shortcuts", "input-injection"
-    ///                         held by nobody by default (ui.md)
+    /// A right the package asks for. Names known in this version, one per
+    /// line: either served by the imports it names, which a world of os:core
+    /// imports, or reserved: named so that the meaning is fixed, but no
+    /// interface serves it yet, so the installer refuses a package that asks
+    /// for it. An unknown name makes the installer refuse the package too,
+    /// rather than run it without a right it expects. `verify` checks that
+    /// every right is served or reserved.
+    ///   "network"             served by wasi:sockets/types, wasi:http/client:
+    ///                         for the long-lived instance; scope: the hosts,
+    ///                         or ["*"] for any host; an empty scope is
+    ///                         refused
+    ///   "background"          served by background: woken without a surface
+    ///                         (D-053)
+    ///   "audio-playback"      reserved: one of three distinct audio rights
+    ///                         (ui.md); no audio interface for applications
+    ///   "microphone"          reserved: as "audio-playback"
+    ///   "audio-capture"       reserved: as "audio-playback"
+    ///   "accessibility-read"  reserved: read other surfaces' trees (assistive
+    ///                         tools); no world imports `accessibility` for
+    ///                         them and no call hands out an `accessible`
+    ///   "global-shortcuts"    reserved: held by nobody by default (ui.md)
+    ///   "input-injection"     reserved: held by nobody by default (ui.md)
+    /// `scope` is empty for every right but "network". A listening socket is
+    /// not offered in this version: wasi:sockets 0.3.2 has no `network`
+    /// resource, and a protocol, a port and an incoming scope (network.md,
+    /// "Opening a port") do not fit this field.
     /// why: one sentence for the user, at most 256 bytes.
     /// A host is an HTTPS origin ("https://api.example.org", with a port if
-    /// not 443); "https://*.example.org" also matches every subdomain.
+    /// not 443); "https://*.example.org" also matches every subdomain; "*"
+    /// alone, only in the scope of "network", is any host.
     record right { name: string, scope: list<string>, why: string }
 
     record action {
@@ -113,7 +133,8 @@ package os:manifest@0.1.0 {
       title: string,
       description: string,
       /// The world the component targets: "os:core/service@0.1.0",
-      /// "os:core/app@0.1.0", "wasi:http/service@0.3.2",
+      /// "os:core/app@0.1.0", "os:core/wake-word@0.1.0",
+      /// "os:core/input-engine@0.1.0", "wasi:http/service@0.3.2",
       /// "wasi:cli/command@0.3.2". The installer checks the component's
       /// imports and exports against it.
       target: string,

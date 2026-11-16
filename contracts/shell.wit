@@ -31,7 +31,7 @@ package os:shell@0.1.0 {
       id: surface-id,
       /// The owner's component id; "" for the system.
       app: string,
-      /// The owner's text.
+      /// The owner's text, set by `ui.surface.set-title`, at most 256 bytes.
       title: string,
       display: display-id,
       layout: layout,
@@ -50,8 +50,11 @@ package os:shell@0.1.0 {
 
     /// list-surfaces. Class none, local. The reply carries `untrusted` and
     /// `private`: titles are written by applications and may show the
-    /// user's data.
-    record list-surfaces-output { surfaces: list<surface-info> }
+    /// user's data. Paged, so that a reply stays under the cap of an action
+    /// output: `skip` surfaces first, at most `limit` (<= 64); `more` is true
+    /// when surfaces remain.
+    record list-surfaces-input { skip: u32, limit: u32 }
+    record list-surfaces-output { surfaces: list<surface-info>, more: bool }
 
     /// list-displays. Class none, local.
     record list-displays-output { displays: list<display-info> }
@@ -59,6 +62,14 @@ package os:shell@0.1.0 {
     /// Class none, local. The actions below of class none change only the
     /// arrangement of the screen, which holds no data and which the user
     /// sees and can redo by hand.
+    /// `focus-surface` also decides where the user's next keys go. It
+    /// answers `denied` for the agent's bar and for a confirmation, and
+    /// `busy` while the user types into another surface (a key in the last
+    /// second, starting value to calibrate; keys typed into the agent's bar
+    /// do not count, so "focus the terminal" works at once). No key is
+    /// dropped after the move. In a task marked `untrusted` it is confirmed
+    /// (tasks.invoke). OPEN (owners, security.md point 28): written as
+    /// recommended there.
     record focus-surface-input { surface: surface-id }
 
     /// Class none, local. display: none keeps the current one.

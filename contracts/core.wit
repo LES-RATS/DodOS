@@ -24,8 +24,9 @@ package os:core@0.1.0;
 // Requires WASI 0.3 (async, stream, future): Rust first, other languages when
 // their tools get there. There is no WASI 0.2 variant of this package.
 // Uses no Component Model feature beyond those WASI 0.3.2 adopts (async,
-// stream and future; map; implements). Not `error-context`, not threads:
-// both are still gated.
+// stream and future; map; the `implements` and `external-id` annotations).
+// Not `error-context`, not threads: both are still gated. `verify` validates
+// each world with only the features it uses.
 //
 // Growth. Adding a case to a variant, enum or flags, or a field to a record,
 // breaks the ABI, and the system serves every published version of os:core.
@@ -54,7 +55,10 @@ package os:core@0.1.0;
 // and changes nothing. The numbers bound one copy by value (rule 6: one
 // Wasm page) or one page of results; nothing measured asks for others.
 //   bytes by value in one call (object read, action input and output,
-//     node props, one inference message)                       65536
+//     node props of one node and of all the nodes of one `update`
+//     together, one inference message)                         65536
+//   props and bindings a surface's tree holds (bytes)       16777216
+//   title of a surface (bytes)                                   256
 //   entries in one page (query, versions, journal, memory)       256
 //   actions in one page of `available`                            64
 //   nodes in one `update`, accessibility nodes in one page       1024
@@ -169,6 +173,18 @@ interface types {
   /// bar, a capture of a third-party surface, a model whose context held
   /// untrusted content (a remote model: see `inference`). Reading the data
   /// adds its marks to the reading task.
+  /// `private` comes from where the data lives, not from who wrote it: the
+  /// storage service adds it to every read from the user, application,
+  /// snapshot and device zones (storage.md), whatever marks the writer had,
+  /// so that a file an application saved outside any task still marks its
+  /// reader. Cache and ephemeral objects keep their writer's marks; objects
+  /// of the system zone and of shared packages carry none; foreign media
+  /// carry `untrusted` by their origin. Reading a surface's accessibility
+  /// tree adds `private` always (see `accessibility`).
+  /// OPEN (owners, security.md point 15): written as recommended there. The
+  /// alternatives: marks from the writer only, which leaves the user's own
+  /// files unmarked; the application zone marked only when its manifest
+  /// asks; downloads excluded from `private`.
   record provenance { origin: principal, marks: marks }
 }
 
@@ -257,22 +273,43 @@ world base {
 ///     ephemeral zone that ends with the instance. These are handles: rule 2
 ///     holds (paths are relative to them, ".." does not leave them).
 ///   - wasi:sockets and wasi:http: only with the manifest right "network",
-///     to the hosts it lists.
+///     to the hosts it lists ("*": any host).
 ///
 /// Once per action: a fresh instance on which the system calls only
 /// `actions.invoke`. It shares no memory with the long-lived instance. Its
 /// imports are linked to match the action's class (the class is the
 /// action's, from the manifest; the component's rights do not widen it):
 ///   - "/home" is the request's `home`, "/tmp" ends with the instance;
-///     `keep`, "/home" and the bound objects are read-only when change is
-///     `none`;
-///   - `background` answers `denied`;
+///     "/home" and the bound objects are read-only when change is `none`;
+///   - `keep`: `get` and `slots` only; `get` returns the item attenuated to
+///     the class (read-only when change is `none`); `put` and `forget`
+///     answer `denied`, so nothing the request carried outlives the
+///     instance (OPEN, owners, security.md point 17: written as recommended
+///     there; the alternative is a `keep` that answers `denied` to every
+///     call);
+///   - `background` answers `denied`; `exchange.copy` and `exchange.pick`
+///     answer `denied` (no gesture, no surface);
 ///   - reach `local`: every network import fails;
 ///   - reach `external`: wasi:sockets and name lookup fail; wasi:http
 ///     `client` reaches only the hosts the manifest lists for that action,
-///     over HTTPS (the network service holds TLS, D-055, so it sees the host);
-///     when change is `none`, only the methods GET and HEAD, with no request
-///     body.
+///     written with the grammar of an os:manifest `right` ("https://" and a
+///     host, a port if not 443, "https://*.example.org"), over HTTPS (the
+///     network service holds TLS, D-055, so it sees the host), and follows
+///     no redirect; when change is `none`, only the methods GET and HEAD,
+///     with no request body.
+/// A package whose manifest holds the right "network" can carry what an
+/// action of change `reversible` or `irreversible` wrote into `home` off the
+/// machine from its long-lived instance. So in a task marked `untrusted`,
+/// such an action of reach `local` is decided by `tasks.invoke` as an
+/// external modification: confirmed, held, counted in `budget.external`,
+/// not undoable once done. In a task without the mark it stays automatic.
+/// An action of change `none` is unaffected: its `home` is read-only.
+/// OPEN (owners, security.md point 16): written as recommended there. The
+/// alternatives: the same in every task; a read-only or separate `home` for
+/// action instances; the network service refusing a marked sender.
+/// Known limit, not a hole: an instance of reach `external` reads its own
+/// `home` after the matrix decided and may send it to the hosts of its own
+/// manifest, which the long-lived instance can do anyway.
 /// OPEN (owners, security.md point 1): for reach `external` the class is
 /// not binding as it is for `local`. The rule above (GET and HEAD, no body,
 /// declared hosts, for change `none`) narrows a false class; it does not
@@ -360,6 +397,8 @@ world agent {
 
   /// One user request. `overlay` only accepts agent-level kinds. The task
   /// starts with the marks of the request's parts (see `tasks.request`).
+  /// The system makes one `handle` call into an instance at a time, so the
+  /// entity's hint and an `audio` call belong to the task that runs.
   export handle: async func(request: request, scope: task, overlay: surface);
 }
 

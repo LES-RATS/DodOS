@@ -79,8 +79,16 @@ package os:catalog-agent@0.1.0 {
     /// Its effect class comes from the manifest, never from the tree.
     record invocation { app: string, name: string, args: list<argument> }
 
-    /// With an action: activating it invokes the action through the task,
-    /// under the same rules as `task.invoke`; the surface owner then gets
+    /// With an action: activating it invokes the action under the same rules
+    /// as `task.invoke`. On the agent's overlay it runs in the overlay's
+    /// task. On an application's own surface a button with an action is
+    /// refused (`invalid`): there is no task there, and the application
+    /// handles its own events. On a notification (ui.md; no interface in
+    /// this version) it may name only an action of the notifying package,
+    /// with no bound item, and runs in a task the system opens for that one
+    /// call, marked `untrusted`, whose scope is that action; the click is
+    /// not a confirmation. OPEN (owners, security.md point 22): written as
+    /// recommended there. The surface owner then gets
     ///   "completed"  {"entry": id, "output": {...}}, objects, provenance of
     ///                the result
     ///   "failed"     {"entry": id, "error": "<error case name>"}
@@ -91,12 +99,17 @@ package os:catalog-agent@0.1.0 {
     /// `secret`, the event carries null and `value` is ignored on update:
     /// the value never reaches the surface owner, only an action through
     /// `source.input`.
+    /// A secret field feeds only an argument whose property carries
+    /// "os-secret" (os:manifest): an update that would leave a button
+    /// reading a secret field into any other property is refused
+    /// (`invalid`).
     /// A secret field on the agent's overlay: refused while the task is
     /// marked `untrusted` (injected text asking for a password in the
     /// agent's own card); otherwise accepted only if the buttons that read
     /// it all invoke actions of one application, which the system names
-    /// beside the field. The confirmation of an action that receives a
-    /// secret names the receiving application first.
+    /// beside the field. An action that receives a secret is confirmed
+    /// whatever its class: the confirmation names the receiving application
+    /// first and shows the secret masked (security.md point 18).
     record field { label: string, kind: field-kind, value: string }
 
     record choice-option { value: string, label: string }
@@ -142,9 +155,9 @@ package os:catalog-agent@0.1.0 {
 /// Application level: the kinds our own userland and catalogue applications
 /// need beyond the agent's. An application surface accepts both levels; the
 /// agent's overlay accepts only the agent level.
-/// The document names ten kinds "and a few more" without fields. The fields
-/// below are those of version 0.1.0: the minimum that gives each kind a
-/// meaning. More come as optional fields in minor versions (see the top of
+/// The document names fifteen kinds at this level (ui.md) without fields.
+/// The fields below are those of version 0.1.0: the minimum that gives each
+/// kind a meaning. More come as optional fields in minor versions (see the top of
 /// this file).
 package os:catalog-app@0.1.0 {
   interface kinds {

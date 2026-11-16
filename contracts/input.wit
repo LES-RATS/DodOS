@@ -100,12 +100,20 @@ interface engine {
 
   variant engine-output {
     edit(edit),
-    /// Give a key back: the field receives it as if no engine were active.
+    /// Give a key back: only the current key event, before the engine emits
+    /// any `edit` or `candidates` for it or receives the next key; the field
+    /// receives it as if no engine were active. Any other `forward` ends the
+    /// activation and the system's own engine serves the field: an engine
+    /// cannot make up or replay a key.
     forward(key-event),
     /// Replace the candidates shown; an empty list hides them.
     candidates(candidates),
   }
 
+  /// A third-party engine is activated only for the purposes and languages
+  /// for which the user chose it in the settings; the system's own engines
+  /// serve every other field, and the agent's bar is served only by engines
+  /// shipped with the system.
   /// One activation per focused field, in the field's `state` at that time.
   /// `home` is the engine's own collection (dictionary, what it learnt). Ends
   /// when the system ends `input` (the focus moved); the engine then ends

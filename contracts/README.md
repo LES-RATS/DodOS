@@ -35,7 +35,7 @@ Unsettled points are marked `OPEN:` in the files, each with its alternatives and
 
 ## WASI
 
-`os:core` uses WASI 0.3, released on 11 June 2026; the current release is 0.3.2 (13 October 2026), and 0.3.3 is scheduled for 8 December 2026 ([release schedule](https://github.com/WebAssembly/WASI/blob/main/docs/Release.md)). WASI 0.3 rests on the Component Model's async (`async` functions, `stream`, `future`); 0.3.1 adopted `map` and `implements`. Nothing else is adopted ([adopted features](https://github.com/WebAssembly/WASI/blob/main/docs/ComponentModelFeatures.md)), and these files use nothing else.
+`os:core` uses WASI 0.3, released on 11 June 2026; the current release is 0.3.2 (13 October 2026), and 0.3.3 is scheduled for 8 December 2026 ([release schedule](https://github.com/WebAssembly/WASI/blob/main/docs/Release.md)). WASI 0.3 rests on the Component Model's async (`async` functions, `stream`, `future`); 0.3.1 adopted `map`, and the `implements` and `external-id` annotations on interface names. Nothing else is adopted ([adopted features](https://github.com/WebAssembly/WASI/blob/main/docs/ComponentModelFeatures.md)), and these files use nothing else: today every world needs only async.
 
 Threads: WASI 0.3 gives concurrency inside one instance (async tasks interleaved at waits) and parallelism only between instances. The Component Model's threads (🧵, `thread.new-indirect` and the other `thread.*` built-ins) are specified but gated and not adopted by any WASI release; without the core proposal shared-everything-threads (phase 1) they are cooperative only, one instance running one thread at a time ([Concurrency.md](https://github.com/WebAssembly/component-model/blob/main/design/mvp/Concurrency.md), [gated features](https://github.com/WebAssembly/component-model/blob/main/design/mvp/Text.md#gated-features), [proposals](https://github.com/WebAssembly/proposals)). Wasmtime implements the threading built-ins behind the flag `component-model-threading`.
 
@@ -43,4 +43,4 @@ Threads: WASI 0.3 gives concurrency inside one instance (async tasks interleaved
 
     wit-deps -m contracts/deps.toml -l contracts/deps.lock -d contracts/deps lock
 
-`verify` checks that the WIT resolves, that every world encodes as a valid component, and that `deps/` is byte for byte the tarball `deps.toml` pins (it downloads it once into `target/`).
+`verify` checks that the WIT resolves; that every world encodes as a valid component, validated with only the Component Model features that world uses, as listed in `verify` (a world missing from the list, or a feature WASI has not adopted, fails); that every right `manifest.wit` names is served by an import of a world or marked reserved; and that `deps/` is byte for byte the tarball `deps.toml` pins (it downloads it once into `target/`).

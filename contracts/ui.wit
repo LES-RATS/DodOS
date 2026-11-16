@@ -51,17 +51,29 @@ interface ui {
 
   resource surface {
     /// Inserts or replaces nodes by id. Children keep arrival order. At most
-    /// 1024 nodes per call. The system checks every update: known kind
+    /// 1024 nodes per call, and 65536 bytes of props in all. The system
+    /// checks every update against the tree it would leave: known kind
     /// allowed on this surface (`unsupported`), props matching the kind,
-    /// existing parent, actions within the task scope, caps (`invalid`,
-    /// `too-large`), and on the agent's overlay the rules that keep the model
-    /// from imitating the system (icon names `system` and `untrusted`,
-    /// secret fields: see os:catalog-agent). A rejected update changes
-    /// nothing.
+    /// existing parent, a button with an action only on the agent's overlay
+    /// and within the task scope (see os:catalog-agent `button`), caps
+    /// (`invalid`, `too-large`), and on the agent's overlay the rules that
+    /// keep the model from imitating the system (icon names `system` and
+    /// `untrusted`, secret fields: see os:catalog-agent). The tree the
+    /// system holds for a surface is capped at 16 MiB of props and bindings
+    /// and charged to the owner's memory (for the overlay, the task's
+    /// `budget.memory`; for an application, its process's memory limit,
+    /// D-073): past either, `update` answers `quota-exceeded`. A rejected
+    /// update changes nothing.
     update: async func(nodes: list<node>) -> result<_, error>;
 
     /// Removes the nodes and their descendants.
     remove: async func(ids: list<node-id>) -> result<_, error>;
+
+    /// The title shown in window lists and read through `accessibility`:
+    /// plain text, at most 256 bytes (`too-large`), no control character
+    /// (`invalid`). "" (the default) shows the package title, or the
+    /// system's name for a surface of the system.
+    set-title: async func(title: string) -> result<_, error>;
 
     /// Ends when the surface is closed or revoked.
     events: func() -> stream<event>;

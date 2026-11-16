@@ -27,7 +27,9 @@ interface store {
   /// (storage.md), reported by `versions`. The contract guarantees two
   /// things: the current version is always readable, and every version a
   /// journal entry needs to undo stays readable while that entry is
-  /// undoable.
+  /// undoable. Every version bound to a journal entry of reach `external`
+  /// stays readable as long as the journal keeps the entry, so the user can
+  /// see what left.
   type version = u64;
 
   record object-info {
@@ -40,6 +42,8 @@ interface store {
     /// Rights this handle holds.
     held: rights,
     /// Stamped by the system at each write: who wrote, under which marks.
+    /// A read from the user, application, snapshot or device zone also adds
+    /// `private`, whoever wrote it (core.wit, `provenance`).
     provenance: provenance,
     /// Free metadata set by `set-meta`. At most 64 pairs.
     meta: list<tuple<string, string>>,
@@ -168,7 +172,9 @@ interface store {
 
 /// Keeping a received capability across launches. Rights from the manifest
 /// are re-derived at each launch; a capability received at run time (picker,
-/// drop, action argument) dies with the instance unless it is put here.
+/// drop) dies with the instance unless it is put here. An action instance
+/// cannot put: it reads `keep` only (core.wit, `world service`), so an
+/// action argument dies with the instance.
 /// The table belongs to the component identity (rule 3) and is held by the
 /// system; revoking a line of it is how the user takes the right back.
 /// Not imported by the agent: nothing survives a task.
@@ -212,7 +218,11 @@ interface exchange {
   /// user closes it, `denied` if the caller has no visible surface.
   pick: async func(request: pick-request) -> result<list<item>, error>;
 
-  /// Puts items on the clipboard. Each needs `share`. The system pins the
+  /// Puts items on the clipboard. Each needs `share`. Answered only right
+  /// after a copy or cut gesture of the user on the caller's surface (the
+  /// copy key, a menu entry, or a copy button of that surface the user
+  /// activated); `denied` otherwise, and always in an action instance,
+  /// which has none. The system pins the
   /// current version: later writes do not change what is pasted. The
   /// clipboard keeps each item's provenance, and so does every paste: into
   /// an application (the items' `object-info`), into a catalogue field (the

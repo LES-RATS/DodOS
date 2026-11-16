@@ -24,10 +24,10 @@ A result has `content` (text, image, audio, resource blocks), optional `structur
 | `title` | action `title` | Cut to 64 bytes |
 | `description` | action `description` | Cut to 1024 bytes. Third-party text: `action-info` carries the publisher's provenance |
 | `inputSchema` | `input-schema` | Kept if it fits the subset of manifest.wit; `additionalProperties: false` added at every object (the confirmation must show everything sent); a schema outside the subset is refused, not rewritten |
-| `outputSchema` | `output-schema` | As above. Without one: `{"type": "object", "properties": {"text": {"type": "string"}}}` |
+| `outputSchema` | `output-schema` | Kept if it fits the subset; no `additionalProperties: false` added here, since an update may add an output property (manifest.wit). Without one: `{"type": "object", "properties": {"text": {"type": "string"}, "objects": {"type": "array", "items": {"type": "string", "os-item": {"kind": "object", "rights": ["read"], "content-types": []}}}}}` |
 | result `structuredContent` | `outcome.output` | When there is an output schema |
 | result `content` text blocks | `outcome.output` `{"text": ...}` | Joined in order |
-| result image, audio and resource blocks | `outcome.objects` | Each written as an object of `home`, returned as a binding, so the agent passes it on without reading it |
+| result image, audio and resource blocks | `outcome.objects` | Each written as an object of `home`, which needs a class that allows a write (`home` is read-only when change is `none`), and returned as a binding named by an `"os-item"` property of `output` (`objects` above), so the agent passes it on without reading it. A tool that returns them is declared `reversible` |
 | `isError: true` | error `invalid(<text>)` | The text is third-party: the reply's marks reach the task with it (tasks.invoke) |
 | progress notifications | the `progress` stream | `note` is third-party text |
 | `notifications/cancelled` | dropping the reading ends | Both ways |
@@ -41,7 +41,7 @@ A result has `content` (text, image, audio, resource blocks), optional `structur
 5. **Untyped commands.** A tool whose parameters are free text or any JSON (`command_run {id, params?}` over 500 engine commands whose parameters are a free-text description) gives the confirmation nothing to draw from. Not mapped. Alternative for a publisher who insists: class `irreversible`, so every call is confirmed with its raw JSON.
 6. **Driving pixels.** Tools that click, drag, type or take screenshots in a window (`ui_pointer`, `ui_click`, `ui_screenshot`) are what the agent must never do: it acts by typed actions. Not mapped.
 7. **Sampling, elicitation, prompts.** Sampling would let a third party run the agent's model on the task's budget with its own text; elicitation would let it ask the user questions outside the system's surfaces; a prompt is third-party text offered as instructions. None is mapped. A question to the user becomes an input of the action; a resource becomes an object.
-8. **Remote servers.** Over Streamable HTTP with OAuth, the adapter is an action of reach `external` to the server's host; a token kept between calls lives in `home`, since an action instance keeps nothing else. A token typed by the user arrives through a secret field.
+8. **Remote servers.** Over Streamable HTTP with OAuth, the adapter is an action of reach `external` to the server's host; a token kept between calls lives in `home`, since an action instance keeps nothing else, and the whole adapter (its long-lived instance included) can read it, as any application reads its own credentials. A token typed by the user arrives through a secret field. Streamable HTTP sends every request as a `POST` with a body, which an action of change `none` cannot do (core.wit, `world service`): a remote adapter is declared `reversible`, or waits for the owners' answer on the `OPEN` point of reach `external`.
 
 ## The adapter component
 
