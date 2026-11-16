@@ -1,0 +1,166 @@
+// The package manifest: what the system reads about a package before it runs
+// any of it (D-012, D-035, D-056, D-067). Types only, like the catalogue: a
+// manifest file is the JSON value encoding (core.wit) of one `manifest`
+// record, UTF-8, at most 1 MiB. Versioned on its own.
+//
+// Signature. A manifest is signed by being a TUF target of its publisher's
+// repository: the publisher's targets role, held by a signing key that its
+// root key delegates (D-056), signs the manifest file's length and SHA-256.
+// The system checks the chain from the root key that `publisher` names;
+// revocation travels with the TUF metadata. No signature format of its own.
+// Blobs are fetched by root hash from static HTTPS hosting (D-067) and
+// checked against their `blob-ref` on read.
+//
+// Schemas (ABI). An action's input and output schemas are JSON Schema
+// 2020-12 documents ("$schema" absent or the 2020-12 URI) over the value
+// encoding of core.wit, restricted to this subset, so that the system can
+// check every input and draw every confirmation faithfully from it:
+//   type, enum, const, title, description, default, examples
+//   properties, required, additionalProperties, items, prefixItems,
+//     minItems, maxItems, uniqueItems
+//   minimum, maximum, exclusiveMinimum, exclusiveMaximum, multipleOf
+//   minLength, maxLength, pattern (I-Regexp, RFC 9485), format ("date-time",
+//     "date", "time", "duration", "email", "uri", "uuid")
+//   oneOf, anyOf (variants and options)
+//   $defs, and $ref to "#/$defs/<name>" only
+// and two keywords of DodOS, on a property of type string; in an output
+// schema "os-item" may also sit on the `items` subschema of one array, one
+// binding per element, never in an input schema, where a catalogue
+// `argument` names a top-level property only:
+//   "os-item": {"kind": "object" | "collection", "rights": [<rights>],
+//               "content-types": [<media types>]}
+//       the value is the name of a binding carried next to the JSON (core.wit
+//       value encoding); the system attenuates the item to these rights and
+//       to the action's class
+//   "os-secret": true
+//       filled only from a secret field of the agent's overlay
+//       (os:catalog-agent `field`), which feeds no other property; a call
+//       that would set it otherwise answers `invalid` (tasks.invoke); an
+//       action that receives one is confirmed whatever its class; shown
+//       masked in the confirmation, written as null in the journal, never
+//       sent to a model
+// An input schema has "type": "object" at the root and "additionalProperties":
+// false at every object, so that a confirmation shows everything sent.
+// Anything else (remote $ref, $dynamicRef, if/then/else, not, allOf,
+// patternProperties, dependentSchemas, unevaluated*) is refused by
+// `dodo package` and by the installer.
+//
+// Updates (ABI). The WIT breaking-change check does not see schemas, so an
+// update is checked here, action by action, against the installed version
+// (by the installer) and the last published one (by `dodo package`):
+//   allowed     a new action; a new optional input property; a new output
+//               property; an input constraint widened (longer maxLength, a
+//               new enum value accepted); a class lowered; hosts removed
+//   refused     an action removed or renamed (a removal is a new package
+//               name); a required input added; an input property removed;
+//               an input constraint narrowed; a type changed; an output
+//               property removed or its values widened; "os-item" added to
+//               or removed from a property, or its kind changed; "os-secret"
+//               added or removed
+//   a new right a class raised (`none` to `reversible` or `irreversible`,
+//               `local` to `external`), a host added, or a right added to an
+//               "os-item": the user agrees again, as for any new right
+//               (D-056)
+
+package os:manifest@0.1.0 {
+  interface format {
+    use os:core/types@0.1.0.{effect};
+
+    /// root: the root hash of the blob's Merkle tree, 64 lowercase
+    /// hexadecimal digits: SHA-256 over 8192-byte blocks, as Fuchsia's
+    /// blobfs computes it (storage.md models the store on blobfs). size:
+    /// bytes.
+    record blob-ref { root: string, size: u64 }
+
+    /// name: 1 to 64 bytes of [a-z0-9.-].
+    record named-blob { name: string, blob: blob-ref }
+
+    /// A right the package asks for. Names known in this version, one per
+    /// line: either served by the imports it names, which a world of os:core
+    /// imports; or served by a world it names, for a package of that target
+    /// only; or reserved: named so that the meaning is fixed, but no
+    /// interface serves it yet, so the installer refuses a package that asks
+    /// for it. An unknown name makes the installer refuse the package too,
+    /// rather than run it without a right it expects. `verify` checks that
+    /// every right is served or reserved.
+    ///   "network"             served by wasi:sockets/types, wasi:http/client:
+    ///                         for the long-lived instance; scope: the hosts,
+    ///                         or ["*"] for any host; an empty scope is
+    ///                         refused; sockets and name lookup are served
+    ///                         only by ["*"], a socket address being an
+    ///                         address and not an origin
+    ///   "background"          served by background: woken without a surface
+    ///                         (D-053)
+    ///   "audio-playback"      reserved: one of three distinct audio rights
+    ///                         (ui.md); no audio interface for applications
+    ///   "microphone"          served by world wake-word: the samples of
+    ///                         the stream `detect` receives, for a package
+    ///                         whose target is that world only; the
+    ///                         installer refuses it for any other target,
+    ///                         and refuses a wake-word package that does not
+    ///                         ask for it (ui.md)
+    ///   "audio-capture"       reserved: as "audio-playback"
+    ///   "accessibility-read"  reserved: read other surfaces' trees (assistive
+    ///                         tools); no world imports `accessibility` for
+    ///                         them and no call hands out an `accessible`
+    ///   "global-shortcuts"    reserved: held by nobody by default (ui.md)
+    ///   "input-injection"     reserved: held by nobody by default (ui.md)
+    /// `scope` is empty for every right but "network". A listening socket is
+    /// not offered in this version: wasi:sockets 0.3.2 has no `network`
+    /// resource, and a protocol, a port and an incoming scope (network.md,
+    /// "Opening a port") do not fit this field.
+    /// why: one sentence for the user, at most 256 bytes.
+    /// A host is an HTTPS origin ("https://api.example.org", with a port if
+    /// not 443); "https://*.example.org" also matches every subdomain; "*"
+    /// alone, only in the scope of "network", is any host.
+    record right { name: string, scope: list<string>, why: string }
+
+    record action {
+      /// [a-z][a-z0-9-]{0,63}, unique in the manifest.
+      name: string,
+      /// For people: at most 64 bytes.
+      title: string,
+      /// For the model and for people: at most 1024 bytes. Third-party text
+      /// (see `tasks.action-info`).
+      description: string,
+      /// At most 65536 bytes each, in the subset above.
+      input-schema: string,
+      output-schema: string,
+      effect: effect,
+      /// For reach `external`: the hosts this action may reach, at least
+      /// one; its instance reaches no other (core.wit, `world service`).
+      /// Empty for reach `local`. The installer shows these hosts to the
+      /// user with the package's rights, as it shows the scope of "network":
+      /// what the package holds, its actions can send there.
+      hosts: list<string>,
+    }
+
+    record manifest {
+      /// "0.1.0": the version of this package the file follows.
+      format: string,
+      /// The publisher part of the component id (os:core `component-id`).
+      publisher: string,
+      /// [a-z][a-z0-9-]{0,63}.
+      name: string,
+      /// Semantic Versioning 2.0.0. An update carries a greater version.
+      version: string,
+      /// For people: at most 64 and 4096 bytes, plain text.
+      title: string,
+      description: string,
+      /// The world the component targets: "os:core/service@0.1.0",
+      /// "os:core/app@0.1.0", "os:core/wake-word@0.1.0",
+      /// "os:core/input-engine@0.1.0", "wasi:http/service@0.3.2",
+      /// "wasi:cli/command@0.3.2". The installer checks the component's
+      /// imports and exports against it.
+      target: string,
+      component: blob-ref,
+      /// Other blobs (data, models, assets), by name.
+      blobs: list<named-blob>,
+      /// Asked at install; granted rights are re-derived from the manifest
+      /// at each launch.
+      rights: list<right>,
+      /// At most 1024.
+      actions: list<action>,
+    }
+  }
+}

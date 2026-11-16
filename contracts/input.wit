@@ -1,0 +1,122 @@
+// The text input protocol (ui.md): surrounding text, pre-edit, commit,
+// cursor rectangle, on the model of Wayland's text-input (v3) and
+// input-method (v2) protocols.
+//
+// Three parties: a field the application draws itself, an input engine, and
+// the system between them, which owns the focus. The catalogue's own fields
+// (`field`, `search`, `text-editor`) and the agent's bar use this protocol
+// inside the system: their owners only see the resulting value. Every source
+// of text produces `edit`s the same way: input methods, the virtual
+// keyboard, the emoji picker, and the system's speech recogniser, which is
+// how dictation reaches a field (agent.md). Offsets are UTF-8 bytes, always
+// on character boundaries.
+
+interface text-input {
+  use types.{error, provenance};
+  use ui.{surface, node-id};
+
+  /// Logical pixels, relative to the node.
+  record rect { x: s32, y: s32, width: u32, height: u32 }
+
+  record field-state {
+    /// Text around the cursor, at most 4096 bytes; the field chooses the
+    /// window.
+    surrounding: string,
+    /// Offsets into `surrounding`. anchor = cursor when nothing is selected.
+    cursor: u32,
+    anchor: u32,
+    /// Open set: "text", "name", "email", "url", "number", "phone", "date",
+    /// "time", "terminal", "password", "pin". A "password" or "pin" field is
+    /// served only by the system's own keyboard engine: no other engine, no
+    /// dictation, empty surrounding text, nothing learned.
+    purpose: string,
+    /// BCP 47 language tag of the content; "" when unknown.
+    language: string,
+    /// Where the system places the engine's candidates.
+    cursor-rect: rect,
+  }
+
+  /// One atomic change, applied in this order: delete `delete-before` bytes
+  /// before the cursor and `delete-after` bytes after it; replace the
+  /// selection and the current pre-edit with `commit`; show `preedit` at the
+  /// cursor, not yet part of the text ("" removes it).
+  record edit {
+    delete-before: u32,
+    delete-after: u32,
+    commit: string,
+    preedit: string,
+    /// Cursor within the pre-edit, begin and end; none hides it.
+    preedit-cursor: option<tuple<u32, u32>>,
+  }
+
+  /// Origin "user" for what the user typed, chose or dictated through an
+  /// engine shipped with the system; "app:<engine>" with `untrusted` through
+  /// a third-party engine, which can type anything; the pasted item's
+  /// provenance for a paste.
+  record edit-event { edit: edit, provenance: provenance }
+
+  /// A text field the caller draws inside a `canvas` node (os:catalog-app)
+  /// of a surface it owns. Attach one when a field gets the application's
+  /// own focus, drop it when the field loses it. Edits flow only while the
+  /// surface has the compositor's focus; keys an engine consumes never reach
+  /// the canvas as "key" events.
+  resource field {
+    /// Report every change the application made itself (keys it handled,
+    /// cursor moved, text replaced). The engine works from this state.
+    update: async func(state: field-state) -> result<_, error>;
+
+    /// Edits to apply, in order. Ends when the field is dropped, the node
+    /// removed or the surface closed.
+    edits: func() -> stream<edit-event>;
+  }
+
+  /// `not-found` if the node is not a `canvas` of `screen`.
+  attach: async func(screen: borrow<surface>, node: node-id, state: field-state) -> result<field, error>;
+}
+
+/// Exported by an input engine (world input-engine). An engine draws
+/// nothing: it proposes candidates and the system draws them, near the
+/// cursor rectangle, in system material.
+interface engine {
+  use store.{collection};
+  use text-input.{field-state, edit};
+
+  /// A key as the W3C UI Events specification names it: `key` is a key
+  /// value ("a", "Enter", "Dead"), `code` a physical code ("KeyA"),
+  /// `modifiers` the names of the modifier keys held ("Shift", "Control",
+  /// "Alt", "Meta", "AltGraph").
+  record key-event { key: string, code: string, down: bool, repeat: bool, modifiers: list<string> }
+
+  variant engine-input {
+    /// The field's new state.
+    state(field-state),
+    /// A key, while the engine is active: it receives every key.
+    key(key-event),
+    /// The user picked candidate number n of the last list.
+    pick(u32),
+  }
+
+  record candidates { items: list<string>, selected: option<u32> }
+
+  variant engine-output {
+    edit(edit),
+    /// Give a key back: only the current key event, before the engine emits
+    /// any `edit` or `candidates` for it or receives the next key; the field
+    /// receives it as if no engine were active. Any other `forward` ends the
+    /// activation and the system's own engine serves the field: an engine
+    /// cannot make up or replay a key.
+    forward(key-event),
+    /// Replace the candidates shown; an empty list hides them.
+    candidates(candidates),
+  }
+
+  /// A third-party engine is activated only for the purposes and languages
+  /// for which the user chose it in the settings; the system's own engines
+  /// serve every other field, and the agent's bar is served only by engines
+  /// shipped with the system.
+  /// One activation per focused field, in the field's `state` at that time.
+  /// `home` is the engine's own collection (dictionary, what it learnt). Ends
+  /// when the system ends `input` (the focus moved); the engine then ends
+  /// its output.
+  activate: async func(home: collection, state: field-state, input: stream<engine-input>) -> stream<engine-output>;
+}

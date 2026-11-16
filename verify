@@ -2,6 +2,136 @@
 # The single verification command, identical locally and in CI.
 set -eu
 cd "$(dirname "$0")"
-# The WIT contracts must parse and resolve as one set of packages.
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+# The WIT contracts must parse and resolve as one set of packages, with the
+# WASI packages vendored in contracts/deps/.
 wasm-tools component wit contracts/ >/dev/null
 echo "contracts: $(ls contracts/*.wit | wc -l | tr -d ' ') WIT files checked"
+
+# Every world of os:core must encode as a valid component, validated with
+# only the Component Model features that world uses, on top of Wasm 2.0. A new
+# world, or a world that starts using another feature, fails until this list
+# says so; a feature WASI 0.3.2 has not adopted fails always.
+features() {
+  case "$1" in
+    base|service|app|agent|wake-word|input-engine) echo cm-async ;;
+    *) echo "worlds: $1 has no feature list in verify" >&2; return 1 ;;
+  esac
+}
+worlds=$(sed -n 's/^world \([a-z-]*\) *{$/\1/p' contracts/core.wit)
+if grep -nE '^ *world [a-z-]+ *\{' contracts/*.wit | grep -v '^contracts/core.wit:'; then
+  echo "worlds: a world outside contracts/core.wit is not validated" >&2
+  exit 1
+fi
+if [ "$(cat contracts/*.wit | grep -cE '^[[:space:]]*world[[:space:]]')" -ne "$(echo $worlds | wc -w)" ]; then
+  echo "worlds: a world line in contracts/ does not parse" >&2
+  exit 1
+fi
+for w in $worlds; do
+  f=$(features "$w")
+  for x in $(echo "$f" | tr ',' ' '); do
+    case "$x" in
+      cm-async|cm-map|cm-implements) ;;
+      *) echo "worlds: $w uses $x, which WASI 0.3.2 does not adopt" >&2; exit 1 ;;
+    esac
+  done
+  wasm-tools component embed --dummy contracts --world "$w" -o "$tmp/$w.core.wasm"
+  wasm-tools component new "$tmp/$w.core.wasm" -o "$tmp/$w.wasm"
+  wasm-tools validate --features="-all,wasm2,component-model,$f" "$tmp/$w.wasm"
+done
+echo "worlds: $(echo $worlds | wc -w | tr -d ' ') encoded and validated with their features"
+
+# A type-only package (manifest, catalogue, shell) exports no function, so no
+# world carries its types into a component: the gated type features are
+# searched in the source, comments left out.
+if sed 's|//.*||' contracts/*.wit | grep -nE '(^|[^a-z-])error-context([^a-z-]|$)|list<[^<>]*, *[0-9]+ *>'; then
+  echo "contracts: a gated feature (error-context, fixed-length list) that WASI 0.3.2 does not adopt" >&2
+  exit 1
+fi
+
+# Every right manifest.wit names must be served by an import of a world of
+# core.wit, or marked reserved (the installer refuses it).
+awk '/A right the package asks for/,/record right/' contracts/manifest.wit |
+  sed -n 's|^ *///   "\([a-z-]*\)" *\(.*\)$|\1 \2|p' >"$tmp/rights"
+quoted=$(awk '/A right the package asks for/,/record right/' contracts/manifest.wit |
+  grep -c '^ *///  *"[^"]*"  *[a-z]')
+parsed=$(wc -l <"$tmp/rights" | tr -d ' ')
+if [ "$quoted" -ne "$parsed" ]; then
+  echo "rights: a right line in contracts/manifest.wit does not parse" >&2
+  exit 1
+fi
+if [ ! -s "$tmp/rights" ]; then
+  echo "rights: no right found in contracts/manifest.wit" >&2
+  exit 1
+fi
+served=0
+reserved=0
+installable() {
+  awk '/^world (service|app|wake-word|input-engine) \{/{f=1} f&&/^\}/{f=0} f' contracts/core.wit
+}
+while read -r name rest; do
+  case "$rest" in
+    reserved:*) reserved=$((reserved + 1)) ;;
+    "served by world "*)
+      w=$(echo "$rest" | sed 's/^served by world \([a-z][a-z-]*\):.*$/\1/')
+      case "$w" in
+        service|app|wake-word|input-engine) ;;
+        *) echo "rights: \"$name\" names a world that is not installable" >&2; exit 1 ;;
+      esac
+      served=$((served + 1)) ;;
+    "served by "*)
+      for i in $(echo "$rest" | sed 's/^served by \([a-z][a-z0-9:/-]*\(, [a-z][a-z0-9:/-]*\)*\):.*$/\1/' | tr ',' ' '); do
+        if ! installable | grep -Eq "^ *import $i(@[0-9.]+)?;"; then
+          echo "rights: \"$name\" names $i, which no installable world of core.wit imports" >&2
+          exit 1
+        fi
+      done
+      served=$((served + 1)) ;;
+    *)
+      echo "rights: \"$name\" is neither served by an import nor reserved" >&2
+      exit 1 ;;
+  esac
+done <"$tmp/rights"
+echo "rights: $served served, $reserved reserved"
+
+# contracts/deps/ must be exactly the packages that contracts/deps.toml names,
+# byte for byte as in the release tarball it pins.
+url=$(sed -n 's/^url = "\(.*\)"$/\1/p' contracts/deps.toml | sort -u)
+sum=$(sed -n 's/^sha256 = "\(.*\)"$/\1/p' contracts/deps.toml | sort -u)
+if [ "$(echo "$url" | wc -l)" -ne 1 ] || [ "$(echo "$sum" | wc -l)" -ne 1 ]; then
+  echo "deps: contracts/deps.toml must name one tarball and one sha256" >&2
+  exit 1
+fi
+tarball="target/$(basename "$url")"
+# GNU sha256sum, or shasum where sha256sum has no --status (macOS).
+sha256_ok() {
+  if sha256sum --help 2>&1 | grep -q -- '--status'; then
+    sha256sum -c --status -
+  else
+    shasum -a 256 -c - >/dev/null
+  fi
+}
+if ! echo "$sum  $tarball" | sha256_ok 2>/dev/null; then
+  mkdir -p target
+  curl -fsSL -o "$tarball" "$url"
+  echo "$sum  $tarball" | sha256_ok || {
+    echo "deps: $url does not match its sha256" >&2
+    exit 1
+  }
+fi
+tar -xzf "$tarball" -C "$tmp"
+names=""
+for prefix in $(sed -n 's/^prefix = "\(.*\)"$/\1/p' contracts/deps.toml); do
+  name=$(basename "$prefix")
+  names="$names $name"
+  cmp "$tmp/$prefix/$name.wit" "contracts/deps/$name/$name.wit"
+done
+expected=$(for n in $names; do echo "contracts/deps/$n/$n.wit"; done | sort)
+actual=$(find contracts/deps -type f | sort)
+if [ "$expected" != "$actual" ]; then
+  echo "deps: contracts/deps/ holds files deps.toml does not name" >&2
+  exit 1
+fi
+echo "deps: $(echo $names | wc -w | tr -d ' ') WASI packages match $(basename "$url")"

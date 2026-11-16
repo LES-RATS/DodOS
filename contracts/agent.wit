@@ -1,0 +1,317 @@
+// What the agent imports besides its task: models, memory, speech, its
+// on-screen entity, and reading another surface's accessibility tree. Every
+// call that spends or reads on the user's behalf takes the task, so that the
+// system charges its budget and applies its marks.
+
+/// Models for the agent, local or remote, behind one interface (agent.md).
+/// Three levels of service, so that the agent stays useful without a large
+/// model:
+///   no model  the launcher and action search: the agent matches the user's
+///             words against `available` itself; nothing here
+///   decision  a small local model that picks an action and fills its input
+///             (`choose`); speech in and out is in `audio`
+///   large     a large model, local or remote, for multi-step tasks
+///             (`generate`)
+/// The model never invokes anything: a tool call is an `action-ref` and an
+/// input, which the agent invokes through its task, under the confirmation
+/// table.
+///
+/// What a model provider receives is what a request carries: its messages,
+/// the content of the objects bound to them, the declarations of its tools.
+/// Never: a capability or handle; the value of a secret field (it never
+/// reaches the agent); a key or credential of the user or the system; an
+/// object the request does not bind; the user's identity, the device's
+/// identifiers or telemetry. Data of a task marked `private` goes to a
+/// remote model only if the user allowed that provider for private data
+/// (`private-allowed`), otherwise the call answers `denied`.
+///
+/// OPEN (owners, security.md point 3): written as recommended there: the
+/// output of a remote model carries `untrusted`, so a task that used one
+/// counts as marked `untrusted` for the confirmation table. The alternative
+/// trusts the provider the user chose, puts it on the trusted list and says
+/// so to the user; the output of a remote model then carries only the
+/// task's marks. The two owners decide. Either way, a local model's output
+/// carries the task's marks.
+interface inference {
+  use types.{error, provenance};
+  use store.{binding};
+  use tasks.{task, action-ref};
+
+  enum tier { decision, large }
+
+  record model-info {
+    /// "<provider>/<model>", e.g. "local/<model>". The origin of its output
+    /// is "model:<id>".
+    id: string,
+    tier: tier,
+    /// False for a model the system runs on this machine; true when the
+    /// request leaves the machine.
+    remote: bool,
+    /// "local", or the provider the user configured.
+    provider: string,
+    /// Context length, tokens.
+    context: u32,
+    /// The user allowed data marked `private` to go to this model. Always
+    /// true for a local model.
+    private-allowed: bool,
+  }
+
+  /// The models the user configured, local first. Empty: the agent works
+  /// with no model.
+  models: async func() -> result<list<model-info>, error>;
+
+  /// instructions: the agent's own text; user: the user's words; agent: an
+  /// earlier output of the model; action-result: what an action returned.
+  enum role { instructions, user, agent, action-result }
+
+  record message {
+    role: role,
+    /// At most 65536 bytes.
+    content: string,
+    /// Objects whose content goes into the context with this message (text;
+    /// images for a model that reads them). The system reads them itself,
+    /// so reading adds their marks to the task.
+    objects: list<binding>,
+    /// Where the agent says this content comes from, so that the system can
+    /// delimit third-party text in the prompt as data. Advisory: what may be
+    /// sent and what the output carries follow the task's marks, which the
+    /// system keeps, not this field.
+    provenance: provenance,
+  }
+
+  record request {
+    /// "" for the model the user chose for the tier.
+    model: string,
+    tier: tier,
+    /// At most 256.
+    messages: list<message>,
+    /// Actions the model may propose, from the task's scope. The system
+    /// adds their names, descriptions and schemas from the manifests itself;
+    /// this marks the task as `available` does. A ref outside the task's
+    /// scope makes the call answer `denied`.
+    tools: list<action-ref>,
+    /// Constrains the output to this JSON Schema (the manifest's subset),
+    /// for example an interface tree; none for free text.
+    schema: option<string>,
+    max-tokens: u32,
+    /// True while the user waits for the answer: the interactive class;
+    /// otherwise the background class (scheduling.md).
+    interactive: bool,
+  }
+
+  record proposed-call { action: action-ref, input: string }
+
+  variant event {
+    /// Output text, in order.
+    text(string),
+    /// A tool call: an action of `tools` and an input that the system
+    /// checked against its schema.
+    call(proposed-call),
+  }
+
+  record usage { input-tokens: u64, output-tokens: u64, time: u64, remote: bool }
+
+  record outcome {
+    usage: usage,
+    /// Set by the system: origin "model:<id>", the task's marks after the
+    /// system read `request.messages[*].objects`, which is the marks the
+    /// context carried (whatever was in it may have steered the output),
+    /// plus `untrusted` for a remote model (OPEN above).
+    provenance: provenance,
+  }
+
+  /// Streams the output. Cancellation: drop both reading ends; generation
+  /// stops and nothing more is charged. Errors: `unsupported` (no model of
+  /// the tier), `denied` (private data to a remote model not allowed),
+  /// `quota-exceeded` (the task's time or remote tokens), `unreachable`
+  /// (the provider).
+  generate: func(scope: borrow<task>, request: request) -> tuple<stream<event>, future<result<outcome, error>>>;
+
+  record choice { action: action-ref, input: string, score: f32 }
+
+  record choices { best-first: list<choice>, provenance: provenance }
+
+  /// The decision tier: ranks `candidates` (actions of the scope that the
+  /// agent pre-selected by its own matching, at most 64) for the user's
+  /// `words`, fills each input to its schema, and returns at most `limit`.
+  /// A ref outside the task's scope makes the call answer `denied`.
+  /// Including a third-party action in `candidates` marks the task and
+  /// `choices.provenance` `untrusted`, as `tools` in `generate` does.
+  choose: async func(scope: borrow<task>, words: string, candidates: list<action-ref>, limit: u32) -> result<choices, error>;
+}
+
+/// The agent's memory: entries in the user zone that belong to the user,
+/// each with its provenance (agent.md). Append-only: an entry never changes;
+/// a correction is a new entry that replaces an older one, and forgetting is
+/// a tombstone entry. Across devices the log is merged by union (D-066):
+/// entries and tombstones are immutable and named by random ids, so merging
+/// in any order gives the same memory. A forgotten entry's content is erased
+/// on every device once the system's retention period has passed, so a
+/// forget can be undone until then. The user reads and edits the memory
+/// through the system's memory service, which exports actions.
+interface memory {
+  use types.{error, provenance, instant};
+  use store.{object-id};
+  use tasks.{task};
+
+  record entry {
+    /// In the form of an object id.
+    id: string,
+    /// The writing device's clock: for display and order, not for trust.
+    at: instant,
+    /// At most 4096 bytes.
+    text: string,
+    /// Objects it is about, by id (at most 16); opens nothing.
+    about: list<object-id>,
+    /// The entry this one replaces.
+    replaces: option<string>,
+    /// Set by the system at the write: origin "system", the writing task's
+    /// marks plus `private` (the memory is the user's data). A later task
+    /// that reads the entry takes these marks back, so an instruction
+    /// injected once stays untrusted.
+    provenance: provenance,
+  }
+
+  // Each call of `remember` and `forget` is an entry of the task's journal,
+  // as an action of the system's memory service of change `reversible`,
+  // reach `local`: `task.undo` forgets the new entry (and restores the
+  // replaced entry if `replaces` was set), or restores the forgotten one
+  // until the retention period has passed.
+
+  /// Appends an entry and returns its id.
+  remember: async func(scope: borrow<task>, text: string, about: list<object-id>, replaces: option<string>) -> result<string, error>;
+
+  /// Appends a tombstone: the entry leaves every read at once.
+  forget: async func(scope: borrow<task>, id: string) -> result<_, error>;
+
+  /// Entries holding every word of `words` (Unicode word boundaries, case
+  /// folded), newest first; "" matches all. Replaced and forgotten entries
+  /// are left out. Continue with `before`, the last id returned. limit <=
+  /// 256. Reading adds the entries' marks to the task.
+  recall: async func(scope: borrow<task>, words: string, before: option<string>, limit: u32) -> result<list<entry>, error>;
+}
+
+/// Speech for the agent. The microphone is not here: speech in reaches the
+/// agent as text, through the text input protocol, into its bar (a request
+/// part "spoken") or into a field of its overlay. The wake-word signal goes
+/// to the system (world wake-word), never to the agent. The agent holds no
+/// audio right.
+///
+/// Indicators are drawn by the compositor, never by a component (ui.md): the
+/// microphone indicator while speech goes to a recogniser or an application
+/// holds the microphone right, and the entity's "listening" and "speaking"
+/// states. What shows that only the wake-word detector listens is an owners'
+/// point (security.md point 6).
+interface audio {
+  use types.{error};
+  use tasks.{task};
+  use accessibility.{accessible};
+
+  record spoken {
+    /// Bytes of text actually spoken.
+    bytes: u64,
+    /// The user (voice or key) or the system stopped it before the end.
+    interrupted: bool,
+  }
+
+  /// Speaks `text` in the user's voice setting as it arrives, phrase by
+  /// phrase: feed it the model's output while it streams. The system keeps
+  /// what it spoke, with the task's provenance, so that its recogniser drops
+  /// a request that repeats the machine's own speech. The user interrupts by
+  /// speaking (echo cancellation lets the system hear them over its voice)
+  /// or by the agent key; the agent stops it by cancelling the call. A new
+  /// call for the same task interrupts the previous one.
+  speak: async func(scope: borrow<task>, text: stream<string>) -> result<spoken, error>;
+
+  /// Reads a window aloud, as the screen reader does: the system walks the
+  /// tree of `target` from node `start` (the root when none) and speaks it.
+  /// The text goes from the window to the speaker without passing through
+  /// the agent, so it adds no mark to the task. Stopped as `speak`.
+  read-aloud: async func(scope: borrow<task>, target: borrow<accessible>, start: option<string>) -> result<spoken, error>;
+}
+
+/// The agent's on-screen entity: a figure at a fixed place of the agent's
+/// bar, drawn by the compositor in system material from a closed list of
+/// states. The states that report a fact the system knows are set by the
+/// system alone and always win:
+///   listening  speech is routed to the agent
+///   thinking   an inference call of the task is in flight (another form
+///              for a remote model)
+///   speaking   `audio` speaks for the task
+///   acting     an action of the task runs (another form for reach
+///              `external`)
+///   waiting    a confirmation is pending
+///   stopped    the task was refused, cancelled or revoked
+/// When none of these applies, the figure shows the agent's `hint`, or idle
+/// without one. The hint adds only what the system cannot know: it can
+/// neither hide a system state nor show one.
+interface entity {
+  use types.{error};
+
+  /// asking: the agent waits for the user's answer in its overlay.
+  /// done, failed: the agent's own report at the end (the journal is the
+  /// record). none clears it.
+  enum hint { none, asking, done, failed }
+
+  /// The last call wins. `done` and `failed` stay drawn after `handle`
+  /// returns, until the next request of this instance or the overlay
+  /// closes; `asking` and `none` end with the task.
+  set: async func(hint: hint) -> result<_, error>;
+}
+
+/// Reading another surface's accessibility tree, as a capability (ui.md):
+/// read-only. The agent gets it only through `request.screen`, when the user
+/// attached a window; assistive tools get it from the user. Acting on
+/// another application goes through its actions, never through its tree: a
+/// button pressed through the tree would have no effect class. Web pages
+/// export no actions; the browser exports actions on them.
+///
+/// The format is the system's own projection, the same whichever engine
+/// built the tree (Ladybird's for web content, AccessKit for the shell and
+/// gpui, the catalogue for catalogue surfaces); roles and states are named
+/// as WAI-ARIA 1.2 names them.
+interface accessibility {
+  use types.{error, provenance};
+
+  record a11y-node {
+    /// 1 to 64 bytes, unique within one generation of the tree.
+    id: string,
+    /// none = root.
+    parent: option<string>,
+    /// A WAI-ARIA 1.2 role ("button", "heading", "link", "textbox"...).
+    /// Open set.
+    role: string,
+    /// As the accessible name and description computation gives them.
+    name: string,
+    description: string,
+    /// Current value (a text box's text, a slider's value); "" when none,
+    /// and always "" for a secret or password field.
+    /// At most 65536 bytes; longer text is cut and `truncated` set.
+    value: string,
+    truncated: bool,
+    /// The WAI-ARIA states and properties that apply, as "name" or
+    /// "name=value": "checked", "expanded", "disabled", "focused",
+    /// "level=2"... Open set.
+    states: list<string>,
+  }
+
+  /// What reading adds to the task: origin the surface's owner
+  /// ("app:<component-id>", "web:<origin>", "system"); `untrusted` unless
+  /// the owner is the system; `private` always, since what the user's
+  /// screen shows is the user's.
+  record surface-info { title: string, provenance: provenance }
+
+  record page { nodes: list<a11y-node>, generation: u64, more: bool }
+
+  resource accessible {
+    /// The title is the owner's text, set by `ui.surface.set-title`, at most
+    /// 256 bytes: reading it marks as `read` does.
+    info: async func() -> result<surface-info, error>;
+
+    /// Nodes in depth-first order, after node `after`; limit <= 1024.
+    /// `generation` changes whenever the tree changes: a reader that sees
+    /// it change starts again. Reading adds `surface-info.provenance`'s
+    /// marks to the task.
+    read: async func(after: option<string>, limit: u32) -> result<page, error>;
+  }
+}

@@ -10,7 +10,7 @@
     {
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
-          packages = with pkgs; [ wasm-tools ];
+          packages = with pkgs; [ wasm-tools curl ];
         };
       });
     };

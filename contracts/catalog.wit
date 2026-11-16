@@ -3,7 +3,12 @@
 // These interfaces hold types only. `kind` is the catalogue: a case name is
 // the `kind` string of an os:core/ui node, its payload record is the node's
 // `props` (JSON, see "Value encoding" in core.wit). The variant never crosses
-// the ABI, so adding a case is a minor version, not a break.
+// the ABI, so adding a case is a minor version, not a break. The same holds
+// inside props: a minor version may add an enum case (an unknown icon name
+// draws a placeholder) or a record field, and an added field is always an
+// `option`, so that props written against the older version, where the key
+// is absent, still read as valid. A field or case is never removed or given
+// another meaning.
 //
 // Entry criteria for a kind: semantic and not visual, accessible by
 // construction, same rendering in every engine, adaptive layout with no
@@ -27,8 +32,10 @@ package os:catalog-agent@0.1.0 {
     /// Semantic icon names, frozen: a name keeps its meaning forever. The
     /// glyph set behind them (Material Symbols Rounded today) can be replaced
     /// without touching the ABI. An unknown name draws a neutral placeholder.
-    /// OPEN: the document decides the principle, not the list. This is a
-    /// starting set to review.
+    /// This is the list of version 0.1.0; later names come in minor versions.
+    /// `system` and `untrusted` are refused on the agent's overlay: the model
+    /// must not imitate the system's marks inside its own cards
+    /// (security.md).
     enum icon-name {
       // who speaks
       agent, app, system, user,
@@ -39,7 +46,9 @@ package os:catalog-agent@0.1.0 {
       back, forward, up, down, close, menu, more,
       // things
       file, folder, image, audio, video, link, calendar, time, location,
-      settings,
+      settings, person, mail, web, window, display, notification,
+      // devices
+      microphone, speaker, camera, keyboard,
       // state
       check, info, warning, error, help, lock, unlock, private, untrusted,
     }
@@ -70,18 +79,48 @@ package os:catalog-agent@0.1.0 {
     /// Its effect class comes from the manifest, never from the tree.
     record invocation { app: string, name: string, args: list<argument> }
 
-    /// With an action: activating it invokes the action through the task,
-    /// under the same rules as `task.invoke`; the surface owner then gets
+    /// With an action: activating it invokes the action under the same rules
+    /// as `task.invoke`. On the agent's overlay it runs in the overlay's
+    /// task. On an application's own surface a button with an action is
+    /// refused (`invalid`): there is no task there, and the application
+    /// handles its own events. On a notification (ui.md; no interface in
+    /// this version) it may name only an action of the notifying package,
+    /// with no bound item, and runs in a task the system opens for that one
+    /// call, marked `untrusted`, whose scope is that action; the click is
+    /// not a confirmation. OPEN (owners, security.md point 22): written as
+    /// recommended there. The surface owner then gets
     ///   "completed"  {"entry": id, "output": {...}}, objects, provenance of
     ///                the result
     ///   "failed"     {"entry": id, "error": "<error case name>"}
     /// Without: event "activated".
-    record button { label: string, tone: tone, action: option<invocation> }
+    /// `role`: open set, "copy" and "cut" in this version. The shell reads
+    /// it, never the label, to know that an activation is the gesture of
+    /// `exchange.copy` (store.wit).
+    record button { label: string, tone: tone, role: option<string>, action: option<invocation> }
 
     /// Event "changed" with the new value as a JSON string. For kind
-    /// `secret`, the event carries null and `value` is ignored on update:
-    /// the value never reaches the surface owner, only an action through
-    /// `source.input`.
+    /// `secret` on the agent's overlay, the event carries null and `value` is
+    /// ignored on update: the value never reaches the agent, only an action
+    /// through `source.input`. On an application's own surface the owner
+    /// receives the value as for any other kind, since the user typed it for
+    /// that application (security.md); the system serves a `secret` field
+    /// with purpose "password" (input.wit). Either way the system never
+    /// writes the value to a journal, never gives it to the agent, and never
+    /// exposes it through `accessibility` (its value there is "").
+    /// On the agent's overlay a secret field feeds only an argument whose
+    /// property carries "os-secret" (os:manifest): an update that would
+    /// leave a button reading a secret field into any other property is
+    /// refused (`invalid`).
+    /// A secret field on the agent's overlay: refused while the task is
+    /// marked `untrusted` (injected text asking for a password in the
+    /// agent's own card); otherwise accepted only if at least one button
+    /// reads it and every button that reads it invokes actions of one
+    /// application, which the system names beside the field. When the task
+    /// takes the `untrusted` mark the field and its buttons stop answering:
+    /// typing into it gives no value and activating one answers `denied`.
+    /// An action that receives a secret is confirmed whatever its class:
+    /// the confirmation names the receiving application first and shows the
+    /// secret masked (security.md point 18).
     record field { label: string, kind: field-kind, value: string }
 
     record choice-option { value: string, label: string }
@@ -94,7 +133,10 @@ package os:catalog-agent@0.1.0 {
     record preview { source: object-ref }
     /// A JS applet stored as an object, run with no capability. It talks to
     /// the surface owner only by event "message" (a JSON value, origin the
-    /// applet's publisher, always untrusted).
+    /// applet's publisher, always untrusted). On the agent's overlay an
+    /// applet, like an `image`, is drawn inside an opaque frame of
+    /// application material, never on glass, so that it cannot pass for the
+    /// system.
     record applet { source: object-ref }
 
     variant kind {
@@ -124,8 +166,10 @@ package os:catalog-agent@0.1.0 {
 /// Application level: the kinds our own userland and catalogue applications
 /// need beyond the agent's. An application surface accepts both levels; the
 /// agent's overlay accepts only the agent level.
-/// OPEN: the document names ten kinds "and a few more" without fields. The
-/// fields below are the minimum that gives each kind a meaning.
+/// The document names fifteen kinds at this level (ui.md) without fields.
+/// The fields below are those of version 0.1.0: the minimum that gives each
+/// kind a meaning. More come as optional fields in minor versions (see the top of
+/// this file).
 package os:catalog-app@0.1.0 {
   interface kinds {
     use os:catalog-agent/kinds@0.1.0.{node-id, object-ref, icon-name};
@@ -165,12 +209,27 @@ package os:catalog-app@0.1.0 {
     /// Events "changed" and "submitted" with the query as a JSON string.
     record search { label: string, value: string }
 
-    /// A drawing area.
-    /// OPEN: the document lists it without saying how one draws into it.
-    record canvas { alt: string }
+    /// A drawing area of the owner's own drawing. Its pixels are the image
+    /// object `source` (any image type the system previews), drawn again at
+    /// each new version: the owner draws by writing versions. Events:
+    ///   "pointer"  {"x": f, "y": f, "phase": "down"|"move"|"up"|"cancel",
+    ///              "button": n, "pressure": f}, x and y from 0.0 to 1.0
+    ///              across the node
+    ///   "key"      {"key", "code", "down", "repeat", "modifiers"}, named as
+    ///              in input.wit, only while the node has the focus and no
+    ///              input engine consumed the key
+    /// Text with composition goes through `text-input`, attached to this
+    /// node. `alt` is the text alternative.
+    /// OPEN: a canvas fed by the GPU, without a store write per frame, is
+    /// the raw WebGPU way to draw; it waits for the same thing (see the OPEN
+    /// point of `world app` in core.wit).
+    record canvas { alt: string, source: option<object-ref> }
 
     /// Container: the user can drag it; the drop target's owner receives
-    /// the listed items, read-only. Each needs `share`.
+    /// the listed items, read-only. Each needs `share`. A dragged item
+    /// carries the marks of the surface it left (`private` always,
+    /// `untrusted` unless the owner is the system) as well as its own
+    /// (core.wit, `provenance`).
     record drag-source { items: list<object-ref> }
 
     /// Container accepting a drop of these media types (empty = any).
