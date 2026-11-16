@@ -1,0 +1,35 @@
+# WASI 0.3 packages imported by the worlds of os:core, vendored in deps/.
+# Source: the WIT tarball of the WASI 0.3.2 release (13 October 2026),
+# https://github.com/WebAssembly/WASI/releases/tag/v0.3.2
+# Refresh with wit-deps 0.6 (https://github.com/bytecodealliance/wit-deps):
+#   wit-deps -m contracts/deps.toml -l contracts/deps.lock -d contracts/deps lock
+# `verify` checks deps/ against the tarball named here.
+[cli]
+url = "https://github.com/WebAssembly/WASI/releases/download/v0.3.2/wasi-wit-0.3.2.tar.gz"
+sha256 = "2e918e047c6ad251a44b4d1141359495a27219058fd7090f8b8142f6bc0ec311"
+prefix = "wasi-wit-0.3.2/cli"
+
+[clocks]
+url = "https://github.com/WebAssembly/WASI/releases/download/v0.3.2/wasi-wit-0.3.2.tar.gz"
+sha256 = "2e918e047c6ad251a44b4d1141359495a27219058fd7090f8b8142f6bc0ec311"
+prefix = "wasi-wit-0.3.2/clocks"
+
+[filesystem]
+url = "https://github.com/WebAssembly/WASI/releases/download/v0.3.2/wasi-wit-0.3.2.tar.gz"
+sha256 = "2e918e047c6ad251a44b4d1141359495a27219058fd7090f8b8142f6bc0ec311"
+prefix = "wasi-wit-0.3.2/filesystem"
+
+[http]
+url = "https://github.com/WebAssembly/WASI/releases/download/v0.3.2/wasi-wit-0.3.2.tar.gz"
+sha256 = "2e918e047c6ad251a44b4d1141359495a27219058fd7090f8b8142f6bc0ec311"
+prefix = "wasi-wit-0.3.2/http"
+
+[random]
+url = "https://github.com/WebAssembly/WASI/releases/download/v0.3.2/wasi-wit-0.3.2.tar.gz"
+sha256 = "2e918e047c6ad251a44b4d1141359495a27219058fd7090f8b8142f6bc0ec311"
+prefix = "wasi-wit-0.3.2/random"
+
+[sockets]
+url = "https://github.com/WebAssembly/WASI/releases/download/v0.3.2/wasi-wit-0.3.2.tar.gz"
+sha256 = "2e918e047c6ad251a44b4d1141359495a27219058fd7090f8b8142f6bc0ec311"
+prefix = "wasi-wit-0.3.2/sockets"

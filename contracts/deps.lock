@@ -1,0 +1,35 @@
+[cli]
+url = "https://github.com/WebAssembly/WASI/releases/download/v0.3.2/wasi-wit-0.3.2.tar.gz"
+prefix = "wasi-wit-0.3.2/cli"
+sha256 = "f818de3992942248e816bd506520bef9363dbd3f00afddaaaf4bb4260f1a2295"
+sha512 = "ca0ad4762d555fe4aa101cea386313fed24ad0713c6d2b3f788f6428807338ddf95524421ccbe58da42bddec6b411e1016cecba0c6c6dbb2ba6e916cfb8a3a2c"
+
+[clocks]
+url = "https://github.com/WebAssembly/WASI/releases/download/v0.3.2/wasi-wit-0.3.2.tar.gz"
+prefix = "wasi-wit-0.3.2/clocks"
+sha256 = "daae967ccb2545b10258b274cf3c952586dbb74ff8623887e2e876eb9ff9b957"
+sha512 = "67edb586e53d2bc3cca7d3ffd1217eb1d331b1fbe3eec710648cce1d6337c84d217b40caf977b086cb112046f06610cf186507461bdfbc9c49cca609e88ffd7e"
+
+[filesystem]
+url = "https://github.com/WebAssembly/WASI/releases/download/v0.3.2/wasi-wit-0.3.2.tar.gz"
+prefix = "wasi-wit-0.3.2/filesystem"
+sha256 = "aef9687aa2052de40909e0fdd1f41a2fbfc22099426ca973fcbb0e40b61ec4a8"
+sha512 = "93fa631a15e2c58e7c23da8f484bed27b9ddc28f5c0f910dadc22bbd594e9d5f7457f2abacd096da5e88ee3aeb6fada2fbe2f397246e9332adfd919c5c6ca418"
+
+[http]
+url = "https://github.com/WebAssembly/WASI/releases/download/v0.3.2/wasi-wit-0.3.2.tar.gz"
+prefix = "wasi-wit-0.3.2/http"
+sha256 = "44e92750b04813d6517ef202b189e70a3a34ab0af1ab2ec5c6be301ced276f6d"
+sha512 = "a9941fb3f3d59ffbcc08bc00a92fc1850291b746a348c00ac7d0cdfd0e3df22a6e14c3dba9719923c9b485fe62827547565ec39422184bb8cee4dc4eea874477"
+
+[random]
+url = "https://github.com/WebAssembly/WASI/releases/download/v0.3.2/wasi-wit-0.3.2.tar.gz"
+prefix = "wasi-wit-0.3.2/random"
+sha256 = "dcd3d79276c66d5e8174d29e9d48fbb4a68ee3b71ef0fc3eb72929adca8fa304"
+sha512 = "3eb0b4df6ec49ff71fb39c01be9d95a81e2af111374dce22d5ef1659e436126dc270ac80c68b2e1832586e21ebe450d40645d42c0f0fbbefc952fa10472b2ee4"
+
+[sockets]
+url = "https://github.com/WebAssembly/WASI/releases/download/v0.3.2/wasi-wit-0.3.2.tar.gz"
+prefix = "wasi-wit-0.3.2/sockets"
+sha256 = "476e6bb7a357961509d66757a9a7eae66a1217dd9cb0d50e54ef23e1650af0fe"
+sha512 = "0ffbdd7228e4b254693338af010109e1c8b4e81e3c31b1fbe19bd1a0bf887f5a45321089d10ad6d0abe6a6085e2da92f93ada01891878168555f6ed5fb547eb7"

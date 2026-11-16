@@ -2,6 +2,51 @@
 # The single verification command, identical locally and in CI.
 set -eu
 cd "$(dirname "$0")"
-# The WIT contracts must parse and resolve as one set of packages.
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+# The WIT contracts must parse and resolve as one set of packages, with the
+# WASI packages vendored in contracts/deps/.
 wasm-tools component wit contracts/ >/dev/null
 echo "contracts: $(ls contracts/*.wit | wc -l | tr -d ' ') WIT files checked"
+
+# Every world of os:core must encode as a valid component.
+worlds=$(sed -n 's/^world \([a-z-]*\) {$/\1/p' contracts/core.wit)
+for w in $worlds; do
+  wasm-tools component embed --dummy contracts --world "$w" -o "$tmp/$w.core.wasm"
+  wasm-tools component new "$tmp/$w.core.wasm" -o "$tmp/$w.wasm"
+  wasm-tools validate --features all "$tmp/$w.wasm"
+done
+echo "worlds: $(echo $worlds | wc -w | tr -d ' ') encoded and validated"
+
+# contracts/deps/ must be exactly the packages that contracts/deps.toml names,
+# byte for byte as in the release tarball it pins.
+url=$(sed -n 's/^url = "\(.*\)"$/\1/p' contracts/deps.toml | sort -u)
+sum=$(sed -n 's/^sha256 = "\(.*\)"$/\1/p' contracts/deps.toml | sort -u)
+if [ "$(echo "$url" | wc -l)" -ne 1 ] || [ "$(echo "$sum" | wc -l)" -ne 1 ]; then
+  echo "deps: contracts/deps.toml must name one tarball and one sha256" >&2
+  exit 1
+fi
+tarball="target/$(basename "$url")"
+if ! echo "$sum  $tarball" | sha256sum -c --status 2>/dev/null; then
+  mkdir -p target
+  curl -fsSL -o "$tarball" "$url"
+  echo "$sum  $tarball" | sha256sum -c --status || {
+    echo "deps: $url does not match its sha256" >&2
+    exit 1
+  }
+fi
+tar -xzf "$tarball" -C "$tmp"
+names=""
+for prefix in $(sed -n 's/^prefix = "\(.*\)"$/\1/p' contracts/deps.toml); do
+  name=$(basename "$prefix")
+  names="$names $name"
+  cmp "$tmp/$prefix/$name.wit" "contracts/deps/$name/$name.wit"
+done
+expected=$(for n in $names; do echo "contracts/deps/$n/$n.wit"; done | sort)
+actual=$(find contracts/deps -type f | sort)
+if [ "$expected" != "$actual" ]; then
+  echo "deps: contracts/deps/ holds files deps.toml does not name" >&2
+  exit 1
+fi
+echo "deps: $(echo $names | wc -w | tr -d ' ') WASI packages match $(basename "$url")"
