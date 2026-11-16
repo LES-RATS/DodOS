@@ -178,9 +178,19 @@ interface types {
   /// snapshot and device zones (storage.md), whatever marks the writer had,
   /// so that a file an application saved outside any task still marks its
   /// reader. Cache and ephemeral objects keep their writer's marks; objects
-  /// of the system zone and of shared packages carry none; foreign media
-  /// carry `untrusted` by their origin. Reading a surface's accessibility
-  /// tree adds `private` always (see `accessibility`).
+  /// of the system zone and of shared packages take no `private` mark,
+  /// keeping `untrusted` by writer and origin; foreign media carry
+  /// `untrusted` by their origin. A collection bound to a call marks it by
+  /// its zone the same way, though `collection-info` carries no provenance:
+  /// binding a `user`, `application`, `snapshot` or `device` collection
+  /// marks the call `private`, a `foreign` one `untrusted`, so `tasks.invoke`
+  /// decides as for an object of that zone.
+  /// Every route out of a surface adds `private` always, since what the
+  /// user's screen shows is the user's, and `untrusted` unless the owner of
+  /// the surface is the system: its accessibility tree (see
+  /// `accessibility`), a selection copied or cut from it (`exchange.copy`),
+  /// an item dragged out of it (os:catalog-app `drag-source`), a capture of
+  /// it. A store object that leaves this way keeps its own marks as well.
   /// OPEN (owners, security.md point 15): written as recommended there. The
   /// alternatives: marks from the writer only, which leaves the user's own
   /// files unmarked; the application zone marked only when its manifest
@@ -283,8 +293,13 @@ world base {
 ///     "/home" and the bound objects are read-only when change is `none`;
 ///   - `keep`: `get` and `slots` only; `get` returns the item attenuated to
 ///     the class (read-only when change is `none`); `put` and `forget`
-///     answer `denied`, so nothing the request carried outlives the
-///     instance (OPEN, owners, security.md point 17: written as recommended
+///     answer `denied`, so nothing the request carried is kept as a
+///     capability (what the instance writes where its component can read
+///     it later is the subject of point 16, below). When change is `none`
+///     and reach `external`, every call of `keep` answers `denied`: an
+///     action that only reads from outside has no use for a folder the user
+///     picked, and it was the one way user data reached an instance that
+///     can send without marking the call (OPEN, owners, security.md point 17: written as recommended
 ///     there; the alternative is a `keep` that answers `denied` to every
 ///     call);
 ///   - `background` answers `denied`; `exchange.copy` and `exchange.pick`
@@ -297,19 +312,27 @@ world base {
 ///     network service holds TLS, D-055, so it sees the host), and follows
 ///     no redirect; when change is `none`, only the methods GET and HEAD,
 ///     with no request body.
-/// A package whose manifest holds the right "network" can carry what an
-/// action of change `reversible` or `irreversible` wrote into `home` off the
-/// machine from its long-lived instance. So in a task marked `untrusted`,
-/// such an action of reach `local` is decided by `tasks.invoke` as an
-/// external modification: confirmed, held, counted in `budget.external`,
-/// not undoable once done. In a task without the mark it stays automatic.
-/// An action of change `none` is unaffected: its `home` is read-only.
+/// A package that can reach the network, by the right "network" or by
+/// hosts on any of its actions, can carry off the machine what an action of
+/// change `reversible` or `irreversible` wrote where its component can read
+/// it later: into `home`, into an item `keep.get` returned, or into a bound
+/// item that carries `write`. Its long-lived instance can send it outside
+/// any task, and so can an action of reach `external` of the same package,
+/// which reads `home`. So in a task marked `untrusted`, every action of
+/// change `reversible` or `irreversible` and reach `local` of such a
+/// package is decided by `tasks.invoke` as an external modification:
+/// confirmed, held, counted in `budget.external`, not undoable once done.
+/// The rule is decided on the class at `invoke`, before any write exists,
+/// whatever the instance then writes to. In a task without the mark it
+/// stays automatic. An action of change `none` is unaffected: its `home`
+/// and bound items are read-only and it cannot put into `keep`.
 /// OPEN (owners, security.md point 16): written as recommended there. The
 /// alternatives: the same in every task; a read-only or separate `home` for
 /// action instances; the network service refusing a marked sender.
-/// Known limit, not a hole: an instance of reach `external` reads its own
-/// `home` after the matrix decided and may send it to the hosts of its own
-/// manifest, which the long-lived instance can do anyway.
+/// Known limit, not a hole: an instance of change `none` and reach
+/// `external` reads its own `home` after the matrix decided and may send it
+/// to the hosts of that action; what entered `home` from a task marked
+/// `untrusted` was confirmed under the rule above.
 /// OPEN (owners, security.md point 1): for reach `external` the class is
 /// not binding as it is for `local`. The rule above (GET and HEAD, no body,
 /// declared hosts, for change `none`) narrows a false class; it does not

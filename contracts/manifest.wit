@@ -23,17 +23,22 @@
 //     "date", "time", "duration", "email", "uri", "uuid")
 //   oneOf, anyOf (variants and options)
 //   $defs, and $ref to "#/$defs/<name>" only
-// and two keywords of DodOS, on a property of type string:
+// and two keywords of DodOS, on a property of type string; in an output
+// schema "os-item" may also sit on the `items` subschema of one array, one
+// binding per element, never in an input schema, where a catalogue
+// `argument` names a top-level property only:
 //   "os-item": {"kind": "object" | "collection", "rights": [<rights>],
 //               "content-types": [<media types>]}
 //       the value is the name of a binding carried next to the JSON (core.wit
 //       value encoding); the system attenuates the item to these rights and
 //       to the action's class
 //   "os-secret": true
-//       filled only from a secret field (os:catalog-agent `field`), and a
-//       secret field feeds no other property; an action that receives one
-//       is confirmed whatever its class (tasks.invoke); shown masked in the
-//       confirmation, written as null in the journal, never sent to a model
+//       filled only from a secret field of the agent's overlay
+//       (os:catalog-agent `field`), which feeds no other property; a call
+//       that would set it otherwise answers `invalid` (tasks.invoke); an
+//       action that receives one is confirmed whatever its class; shown
+//       masked in the confirmation, written as null in the journal, never
+//       sent to a model
 // An input schema has "type": "object" at the root and "additionalProperties":
 // false at every object, so that a confirmation shows everything sent.
 // Anything else (remote $ref, $dynamicRef, if/then/else, not, allOf,
@@ -72,7 +77,8 @@ package os:manifest@0.1.0 {
 
     /// A right the package asks for. Names known in this version, one per
     /// line: either served by the imports it names, which a world of os:core
-    /// imports, or reserved: named so that the meaning is fixed, but no
+    /// imports; or served by a world it names, for a package of that target
+    /// only; or reserved: named so that the meaning is fixed, but no
     /// interface serves it yet, so the installer refuses a package that asks
     /// for it. An unknown name makes the installer refuse the package too,
     /// rather than run it without a right it expects. `verify` checks that
@@ -80,12 +86,19 @@ package os:manifest@0.1.0 {
     ///   "network"             served by wasi:sockets/types, wasi:http/client:
     ///                         for the long-lived instance; scope: the hosts,
     ///                         or ["*"] for any host; an empty scope is
-    ///                         refused
+    ///                         refused; sockets and name lookup are served
+    ///                         only by ["*"], a socket address being an
+    ///                         address and not an origin
     ///   "background"          served by background: woken without a surface
     ///                         (D-053)
     ///   "audio-playback"      reserved: one of three distinct audio rights
     ///                         (ui.md); no audio interface for applications
-    ///   "microphone"          reserved: as "audio-playback"
+    ///   "microphone"          served by world wake-word: the samples of
+    ///                         the stream `detect` receives, for a package
+    ///                         whose target is that world only; the
+    ///                         installer refuses it for any other target,
+    ///                         and refuses a wake-word package that does not
+    ///                         ask for it (ui.md)
     ///   "audio-capture"       reserved: as "audio-playback"
     ///   "accessibility-read"  reserved: read other surfaces' trees (assistive
     ///                         tools); no world imports `accessibility` for

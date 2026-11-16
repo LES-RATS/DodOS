@@ -43,7 +43,10 @@ interface actions {
     /// JSON object matching the output schema. At most 65536 bytes.
     output: string,
     /// Typed object results, each named by an "os-item" property of
-    /// `output` (core.wit, value encoding). Each needs `share`.
+    /// `output` (core.wit, value encoding). Each needs `share`. Each must
+    /// match the property's `kind` and `content-types`; a binding that no
+    /// "os-item" property names, or a name that no binding carries, is
+    /// `invalid`, as for `input`.
     objects: list<binding>,
   }
 
@@ -94,8 +97,9 @@ interface tasks {
     /// "dropped" (text dropped on the bar).
     via: string,
     /// Origin "user" for typed and spoken parts. A pasted or dropped part
-    /// keeps the provenance of its source (see `exchange.copy`), so pasting
-    /// a page into the bar does not make it the user's words.
+    /// keeps the provenance of its source, with the marks of the surface it
+    /// came from (see `exchange.copy`), so pasting a page into the bar does
+    /// not make it the user's words.
     provenance: provenance,
   }
 
@@ -154,10 +158,13 @@ interface tasks {
     /// Secret properties ("os-secret", manifest.wit) are written as null.
     input: string,
     objects: list<bound>,
-    /// What the call created or wrote, as the system saw it in the
+    /// What the call created, wrote or removed, as the system saw it in the
     /// instance's own store calls: each object at the version it left, a
-    /// removed entry or a collection with version none. What `undo`
-    /// restores: the version before, the entry removed or brought back.
+    /// removed entry or a collection with version none. A summary for the
+    /// user: `undo` restores from the system's own log of the call's store
+    /// operations, which is what holds the metadata of a change that left no
+    /// version, the object a removed entry had and the collection it belonged
+    /// to; `conflict` covers a later change of metadata too.
     writes: list<bound>,
     /// True when the user confirmed this call (or allowed it for the rest
     /// of the task).
@@ -221,12 +228,16 @@ interface tasks {
     ///                                                  confirmation
     ///   other         external  confirmation           confirmation
     ///
+    /// "Marked" in the table and below is the call's marks: those of its
+    /// task and of the items bound to it.
+    ///
     /// Three rows change (security.md): an action that receives a secret
     /// ("os-secret", manifest.wit) is confirmed whatever its class, the
-    /// secret shown masked (point 18); in a task marked `untrusted`, an
+    /// secret shown masked (point 18); in a call marked `untrusted`, an
     /// action of change `reversible` or `irreversible` and reach `local` of a
-    /// package whose manifest holds "network" is decided as an external
-    /// modification (see `world service`, point 16); in a task marked
+    /// package that can reach the network (the right "network", or hosts on
+    /// any of its actions) is decided as an external modification, whatever
+    /// it then writes (see `world service`, point 16); in a call marked
     /// `untrusted`, `focus-surface` of os:shell is confirmed (point 28).
     /// An action outside the scope answers `denied`, whatever its class.
     ///
@@ -238,7 +249,8 @@ interface tasks {
     /// What the agent may observe of the system's confirmation rules
     /// (security.md): the user may allow an action with this exact input and
     /// the same bound objects (the same object at the same version; a call
-    /// that binds a collection, which has no version, always asks) for the
+    /// that binds a collection, which has no version, is never covered by
+    /// the grant and asks when the matrix asks) for the
     /// rest of a task not marked `untrusted`, so a repeat runs without
     /// asking, and a call that binds another item or another version asks
     /// again; the grant ends when the task takes the `untrusted` mark (point
@@ -249,6 +261,8 @@ interface tasks {
     /// `untrusted` for this table (see `inference`, OPEN there).
     ///
     /// `objects` binds items to the "os-item" properties of `input` by name.
+    /// A property that carries "os-secret" is filled only by the system from
+    /// a secret field of the overlay; a value for it in `input` is `invalid`.
     /// Progress and cancellation as in `actions.invoke`: drop both reading
     /// ends to cancel. Every progress value, and whatever the action
     /// returns, an outcome or an error (the text of `invalid`, the code of
@@ -259,8 +273,9 @@ interface tasks {
 
     /// Undoes one entry of this task's journal; `not-found` for any other id
     /// (an entry of a sub-task is undone through the sub-task).
-    /// `unsupported` if it is not undoable, `conflict` if a later write
-    /// touched the same objects.
+    /// `unsupported` if it is not undoable, `conflict` if a later write or
+    /// change of metadata touched the same objects, or a later call created
+    /// or removed an entry of the same name in the same collection.
     undo: async func(entry: u64) -> result<_, error>;
 
     /// Entries of this task's journal, not its sub-tasks', with id greater

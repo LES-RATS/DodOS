@@ -54,7 +54,7 @@ interface ui {
     /// 1024 nodes per call, and 65536 bytes of props in all. The system
     /// checks every update against the tree it would leave: known kind
     /// allowed on this surface (`unsupported`), props matching the kind,
-    /// existing parent, a button with an action only on the agent's overlay
+    /// existing parent with no cycle, a button with an action only on the agent's overlay
     /// and within the task scope (see os:catalog-agent `button`), caps
     /// (`invalid`, `too-large`), and on the agent's overlay the rules that
     /// keep the model from imitating the system (icon names `system` and

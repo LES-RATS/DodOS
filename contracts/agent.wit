@@ -113,9 +113,10 @@ interface inference {
 
   record outcome {
     usage: usage,
-    /// Set by the system: origin "model:<id>", the task's marks when the
-    /// call started (whatever was in the context may have steered the
-    /// output), plus `untrusted` for a remote model (OPEN above).
+    /// Set by the system: origin "model:<id>", the task's marks after the
+    /// system read `request.messages[*].objects`, which is the marks the
+    /// context carried (whatever was in it may have steered the output),
+    /// plus `untrusted` for a remote model (OPEN above).
     provenance: provenance,
   }
 
@@ -134,6 +135,8 @@ interface inference {
   /// agent pre-selected by its own matching, at most 64) for the user's
   /// `words`, fills each input to its schema, and returns at most `limit`.
   /// A ref outside the task's scope makes the call answer `denied`.
+  /// Including a third-party action in `candidates` marks the task and
+  /// `choices.provenance` `untrusted`, as `tools` in `generate` does.
   choose: async func(scope: borrow<task>, words: string, candidates: list<action-ref>, limit: u32) -> result<choices, error>;
 }
 
@@ -281,7 +284,8 @@ interface accessibility {
     /// As the accessible name and description computation gives them.
     name: string,
     description: string,
-    /// Current value (a text box's text, a slider's value); "" when none.
+    /// Current value (a text box's text, a slider's value); "" when none,
+    /// and always "" for a secret or password field.
     /// At most 65536 bytes; longer text is cut and `truncated` set.
     value: string,
     truncated: bool,

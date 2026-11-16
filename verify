@@ -20,7 +20,15 @@ features() {
     *) echo "worlds: $1 has no feature list in verify" >&2; return 1 ;;
   esac
 }
-worlds=$(sed -n 's/^world \([a-z-]*\) {$/\1/p' contracts/core.wit)
+worlds=$(sed -n 's/^world \([a-z-]*\) *{$/\1/p' contracts/core.wit)
+if grep -nE '^ *world [a-z-]+ *\{' contracts/*.wit | grep -v '^contracts/core.wit:'; then
+  echo "worlds: a world outside contracts/core.wit is not validated" >&2
+  exit 1
+fi
+if [ "$(cat contracts/*.wit | grep -cE '^[[:space:]]*world[[:space:]]')" -ne "$(echo $worlds | wc -w)" ]; then
+  echo "worlds: a world line in contracts/ does not parse" >&2
+  exit 1
+fi
 for w in $worlds; do
   f=$(features "$w")
   for x in $(echo "$f" | tr ',' ' '); do
@@ -35,23 +43,48 @@ for w in $worlds; do
 done
 echo "worlds: $(echo $worlds | wc -w | tr -d ' ') encoded and validated with their features"
 
+# A type-only package (manifest, catalogue, shell) exports no function, so no
+# world carries its types into a component: the gated type features are
+# searched in the source, comments left out.
+if sed 's|//.*||' contracts/*.wit | grep -nE '(^|[^a-z-])error-context([^a-z-]|$)|list<[^<>]*, *[0-9]+ *>'; then
+  echo "contracts: a gated feature (error-context, fixed-length list) that WASI 0.3.2 does not adopt" >&2
+  exit 1
+fi
+
 # Every right manifest.wit names must be served by an import of a world of
 # core.wit, or marked reserved (the installer refuses it).
 awk '/A right the package asks for/,/record right/' contracts/manifest.wit |
   sed -n 's|^ *///   "\([a-z-]*\)" *\(.*\)$|\1 \2|p' >"$tmp/rights"
+quoted=$(awk '/A right the package asks for/,/record right/' contracts/manifest.wit |
+  grep -c '^ *///  *"[^"]*"  *[a-z]')
+parsed=$(wc -l <"$tmp/rights" | tr -d ' ')
+if [ "$quoted" -ne "$parsed" ]; then
+  echo "rights: a right line in contracts/manifest.wit does not parse" >&2
+  exit 1
+fi
 if [ ! -s "$tmp/rights" ]; then
   echo "rights: no right found in contracts/manifest.wit" >&2
   exit 1
 fi
 served=0
 reserved=0
+installable() {
+  awk '/^world (service|app|wake-word|input-engine) \{/{f=1} f&&/^\}/{f=0} f' contracts/core.wit
+}
 while read -r name rest; do
   case "$rest" in
     reserved:*) reserved=$((reserved + 1)) ;;
+    "served by world "*)
+      w=$(echo "$rest" | sed 's/^served by world \([a-z][a-z-]*\):.*$/\1/')
+      case "$w" in
+        service|app|wake-word|input-engine) ;;
+        *) echo "rights: \"$name\" names a world that is not installable" >&2; exit 1 ;;
+      esac
+      served=$((served + 1)) ;;
     "served by "*)
-      for i in $(echo "$rest" | sed 's/^served by \([a-z:/-]*\(, [a-z:/-]*\)*\):.*$/\1/' | tr ',' ' '); do
-        if ! grep -Eq "^ *import $i(@[0-9.]+)?;" contracts/core.wit; then
-          echo "rights: \"$name\" names $i, which no world of core.wit imports" >&2
+      for i in $(echo "$rest" | sed 's/^served by \([a-z][a-z0-9:/-]*\(, [a-z][a-z0-9:/-]*\)*\):.*$/\1/' | tr ',' ' '); do
+        if ! installable | grep -Eq "^ *import $i(@[0-9.]+)?;"; then
+          echo "rights: \"$name\" names $i, which no installable world of core.wit imports" >&2
           exit 1
         fi
       done
@@ -61,7 +94,7 @@ while read -r name rest; do
       exit 1 ;;
   esac
 done <"$tmp/rights"
-echo "rights: $served served by an import, $reserved reserved"
+echo "rights: $served served, $reserved reserved"
 
 # contracts/deps/ must be exactly the packages that contracts/deps.toml names,
 # byte for byte as in the release tarball it pins.
@@ -72,10 +105,18 @@ if [ "$(echo "$url" | wc -l)" -ne 1 ] || [ "$(echo "$sum" | wc -l)" -ne 1 ]; the
   exit 1
 fi
 tarball="target/$(basename "$url")"
-if ! echo "$sum  $tarball" | sha256sum -c --status 2>/dev/null; then
+# GNU sha256sum, or shasum where sha256sum has no --status (macOS).
+sha256_ok() {
+  if sha256sum --help 2>&1 | grep -q -- '--status'; then
+    sha256sum -c --status -
+  else
+    shasum -a 256 -c - >/dev/null
+  fi
+}
+if ! echo "$sum  $tarball" | sha256_ok 2>/dev/null; then
   mkdir -p target
   curl -fsSL -o "$tarball" "$url"
-  echo "$sum  $tarball" | sha256sum -c --status || {
+  echo "$sum  $tarball" | sha256_ok || {
     echo "deps: $url does not match its sha256" >&2
     exit 1
   }

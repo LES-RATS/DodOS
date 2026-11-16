@@ -219,11 +219,14 @@ interface exchange {
   pick: async func(request: pick-request) -> result<list<item>, error>;
 
   /// Puts items on the clipboard. Each needs `share`. Answered only right
-  /// after a copy or cut gesture of the user on the caller's surface (the
-  /// copy key, a menu entry, or a copy button of that surface the user
-  /// activated); `denied` otherwise, and always in an action instance,
-  /// which has none. The system pins the
-  /// current version: later writes do not change what is pasted. The
+  /// after a copy or cut gesture of the user on the caller's surface, once
+  /// per gesture and within one event: the copy key, a menu entry, or a
+  /// `button` whose `role` is "copy" or "cut" that the user activated;
+  /// `denied` otherwise, and always in an action instance, which has none.
+  /// The system pins the current version: later writes do not change what
+  /// is pasted. Each item takes the marks of the surface it was copied or
+  /// cut from (`private` always, `untrusted` unless the owner is the
+  /// system) as well as its own (core.wit, `provenance`). The
   /// clipboard keeps each item's provenance, and so does every paste: into
   /// an application (the items' `object-info`), into a catalogue field (the
   /// event's provenance), into the agent's bar (a request part with that
