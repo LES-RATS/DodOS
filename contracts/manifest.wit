@@ -129,7 +129,9 @@ package os:manifest@0.1.0 {
       effect: effect,
       /// For reach `external`: the hosts this action may reach, at least
       /// one; its instance reaches no other (core.wit, `world service`).
-      /// Empty for reach `local`.
+      /// Empty for reach `local`. The installer shows these hosts to the
+      /// user with the package's rights, as it shows the scope of "network":
+      /// what the package holds, its actions can send there.
       hosts: list<string>,
     }
 
