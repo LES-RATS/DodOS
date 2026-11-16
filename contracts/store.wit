@@ -1,23 +1,33 @@
 // Storage: objects and collections, no global tree (rule 2).
 // Every write is versioned, so nothing in this interface is irreversible and a
 // store capability is safe to hand to an action of change `reversible`.
-// OPEN: no purge (drop history, free space at once) is offered to components;
-// it stays behind system services. Do applications need it?
+// No purge (drop history, free space at once) is offered to components: it
+// would make every store capability irreversible, and with it every action
+// that holds one. Purging is an action of the system's storage service, of
+// change `irreversible`, so the user confirms it.
 
 interface store {
   use types.{error, rights, provenance, instant};
 
-  /// Stable id (rule 5): 26 lowercase base32 characters (128 bits), given at
-  /// creation, never reused, unchanged by writes and across devices. It names
-  /// an object in logs, journals and links; it is not a capability and opens
-  /// nothing.
-  /// OPEN: width and alphabet of the id.
+  /// Stable id (rule 5), given at creation, never reused, unchanged by writes
+  /// and across devices. It names an object in logs, journals, memory and
+  /// links; it is not a capability and opens nothing.
+  /// Form: 128 bits from the system's generator, written as 26 characters of
+  /// the base32 alphabet of RFC 4648 in lowercase ("a"-"z", "2"-"7"), no
+  /// padding, most significant bits first; the last character carries the
+  /// last 3 bits followed by two zero bits. Random rather than time-ordered:
+  /// an id travels between devices and into logs, and a time prefix would
+  /// tell anyone holding it when the object was made. 128 random bits make a
+  /// collision between devices negligible, which the merge by union needs.
   type object-id = string;
 
   /// Content version. Every `write`, `write-via-stream` and `resize` that
   /// succeeds yields a greater number. Metadata changes do not.
-  /// OPEN: which versions stay readable (every write, or one per `sync`) is
-  /// the retention policy of the system, not fixed here.
+  /// Which past versions stay readable is the system's retention policy
+  /// (storage.md), reported by `versions`. The contract guarantees two
+  /// things: the current version is always readable, and every version a
+  /// journal entry needs to undo stays readable while that entry is
+  /// undoable.
   type version = u64;
 
   record object-info {
@@ -132,7 +142,10 @@ interface store {
     /// "^=" is "starts with", on strings. "kind" is "object" or "collection".
     /// "size" and "modified" compare as numbers, the rest as byte strings.
     /// A cmp on a field the entry lacks is false. Anything else: `invalid`.
-    /// OPEN: no "or", no negation, no full-text or semantic search.
+    /// No "or": results come in name order, so the caller merges two
+    /// queries. Negation is "!=". Full-text and semantic search are not a
+    /// store function: they need a derived index (and for semantic search a
+    /// model), which is a system indexing service exporting actions.
     query: async func(filter: string, after: option<string>, limit: u32) -> result<page, error>;
 
     /// Changes to direct entries. Ends when the handle is revoked.
@@ -200,14 +213,20 @@ interface exchange {
   pick: async func(request: pick-request) -> result<list<item>, error>;
 
   /// Puts items on the clipboard. Each needs `share`. The system pins the
-  /// current version: later writes do not change what is pasted.
+  /// current version: later writes do not change what is pasted. The
+  /// clipboard keeps each item's provenance, and so does every paste: into
+  /// an application (the items' `object-info`), into a catalogue field (the
+  /// event's provenance), into the agent's bar (a request part with that
+  /// provenance, see `tasks.request`). A paste never turns third-party
+  /// content into origin "user".
   copy: async func(items: list<item>) -> result<_, error>;
 
   /// Read-only items from the clipboard, filtered like `content-types`
   /// above. Answered only right after a paste gesture of the user on the
   /// caller's surface; `denied` otherwise.
-  /// OPEN: text travels as a "text/plain" object; there is no by-value
-  /// shortcut. Text pasted into a catalogue field never reaches the app
-  /// through here: the system handles it.
+  /// Text travels as a "text/plain" object, with no by-value shortcut: one
+  /// path (rule 6), and the provenance stays on the object. Text pasted into
+  /// a catalogue field or a `text-input` field never reaches the app through
+  /// here: the system inserts it.
   paste: async func(content-types: list<string>) -> result<list<item>, error>;
 }

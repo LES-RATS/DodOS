@@ -1,11 +1,17 @@
 package os:core@0.1.0;
 
 // The application contract of DodOS. Files of this package:
-//   core.wit     shared types and the worlds
+//   core.wit     shared types, background wake-up, the worlds
 //   store.wit    storage, kept handles, object exchange
 //   ui.wit       surfaces and the open interface tree
-//   actions.wit  actions (app side), tasks (agent side), agent stubs
-// catalog.wit holds two other packages, versioned on their own.
+//   input.wit    the text input protocol (application side, engine side)
+//   actions.wit  actions (app side), tasks (agent side)
+//   agent.wit    inference, memory, audio, the agent's entity, reading
+//                another surface's accessibility tree
+// Other packages, versioned on their own: catalog.wit (os:catalog-agent,
+// os:catalog-app), manifest.wit (os:manifest), shell.wit (os:shell).
+// deps/ holds the WASI 0.3.2 packages the worlds import, vendored from the
+// WASI release (deps.toml says how; `verify` checks them).
 //
 // ABI rules (design document):
 //   1. Every call on a capability can fail: capabilities are revocable.
@@ -17,14 +23,19 @@ package os:core@0.1.0;
 //
 // Requires WASI 0.3 (async, stream, future): Rust first, other languages when
 // their tools get there. There is no WASI 0.2 variant of this package.
+// Uses no Component Model feature beyond those WASI 0.3.2 adopts (async,
+// stream and future; map; implements). Not `error-context`, not threads:
+// both are still gated.
 //
 // Growth. Adding a case to a variant, enum or flags, or a field to a record,
 // breaks the ABI, and the system serves every published version of os:core.
 // So whatever is expected to grow is open: `error` has a fallback case; node
-// kinds, event kinds, journal states and principals are strings.
+// kinds, event kinds, journal states, principals, rights and request
+// modalities are strings.
 //
 // Value encoding (ABI). A typed value carried as a string (action input and
-// output, node props, event value) is UTF-8 JSON (RFC 8259):
+// output, node props, event value, the package manifest) is UTF-8 JSON
+// (RFC 8259):
 //   bool, string    as in JSON
 //   integers, f32/64 JSON number; u64/s64 outside +-2^53 as a decimal string
 //   list, tuple     array
@@ -37,14 +48,35 @@ package os:core@0.1.0;
 //                   carried next to the string
 // Readers ignore object keys they do not know.
 //
-// OPEN: every size cap in these files (bytes per call, entries per page, nodes
-// per update...) is a provisional number; the document only says caps exist.
+// Size caps. Each cap is part of the ABI of the version that states it: a
+// component may rely on it, a later version of the package may raise it and
+// never lowers it. A call over a cap fails with `too-large` or `invalid`,
+// and changes nothing. The numbers bound one copy by value (rule 6: one
+// Wasm page) or one page of results; nothing measured asks for others.
+//   bytes by value in one call (object read, action input and output,
+//     node props, one inference message)                       65536
+//   entries in one page (query, versions, journal, memory)       256
+//   actions in one page of `available`                            64
+//   nodes in one `update`, accessibility nodes in one page       1024
+//   bindings in one list                                          64
+//   metadata pairs per object; key bytes; value bytes        64; 64; 1024
+//   `keep` slots per component                                   256
+//   rows of a `table` node                                       200
+//   surrounding text in the text input protocol (bytes)          4096
+//   text of one memory entry (bytes)                             4096
+//   messages in one inference request                            256
+//   parts in one agent request                                    64
+//   pending wake-ups per component                                64
 
 interface types {
   /// Component identity (rule 3): "<publisher>/<name>".
-  /// name is [a-z][a-z0-9-]{0,63}. publisher is the publisher root key.
-  /// OPEN: textual form of the publisher key; the package format must fix it
-  /// (assumed: lowercase, no "/" and no ":").
+  /// name is [a-z][a-z0-9-]{0,63}.
+  /// publisher is 64 lowercase hexadecimal digits: the TUF key id (SHA-256
+  /// of the canonical form of the key, as the TUF specification computes
+  /// key ids) of the publisher's first root key. A root rotation signed by
+  /// the current root keeps the identity; a new first root is a new
+  /// publisher. A hash, so the identity has one length whatever the key
+  /// algorithm, and no "/" or ":".
   type component-id = string;
 
   /// Who produced a piece of data. One of:
@@ -52,6 +84,13 @@ interface types {
   ///   "user"              typed, spoken or chosen by the user
   ///   "app:<component-id>"
   ///   "web:<origin>"      origin as in RFC 6454, e.g. "web:https://example.org"
+  ///   "model:<model-id>"  the output of a model (see `inference.model-info`)
+  ///   "capture"           a screenshot or a screen recording; it carries the
+  ///                       union of the marks of the surfaces it shows
+  ///   "device:<kind>"     a recording made outside a user request; kinds
+  ///                       "camera", "microphone"
+  ///   "foreign"           media read from the foreign zone (a USB stick,
+  ///                       another system's disk)
   /// Open set: treat an unknown prefix as an unknown third party.
   type principal = string;
 
@@ -109,8 +148,10 @@ interface types {
   flags rights { read, write, share }
 
   /// Effect class of an action: two independent fields. The class is declared
-  /// in the signed manifest, and the system enforces it by what it hands to
-  /// the action (see `actions`), so lying about it gains nothing.
+  /// in the signed manifest, and the system enforces it by what it links to
+  /// the action instance (see `world service`). For reach `local` this makes
+  /// a false class useless; for reach `external` it only narrows it (see the
+  /// OPEN point there).
   enum change { none, reversible, irreversible }
   enum reach { local, external }
   record effect { change: change, reach: reach }
@@ -120,31 +161,138 @@ interface types {
   ///   untrusted  may carry instructions from a third party
   flags marks { private, untrusted }
 
-  /// Set by the system only, never by the producer. `untrusted` is clear only
-  /// for origin "system" and "user": a publisher cannot declare itself
-  /// trusted. Reading the data adds its marks to the reading task.
+  /// Set by the system only, never by the producer. `untrusted` is always set
+  /// for the origins "app:", "web:", "device:" and "foreign", and for any
+  /// origin this version does not know: a publisher cannot declare itself
+  /// trusted. For "system", "user", "capture" and "model:" it is set when
+  /// third-party content passed through them: text pasted into the agent's
+  /// bar, a capture of a third-party surface, a model whose context held
+  /// untrusted content (a remote model: see `inference`). Reading the data
+  /// adds its marks to the reading task.
   record provenance { origin: principal, marks: marks }
+}
+
+/// Being woken without a surface (D-053). Running in the background is the
+/// manifest right "background"; without it, `schedule` answers `denied`.
+/// The system then starts or resumes an instance, in the background class
+/// with its budget, and calls the `wake` export of `world service`.
+interface background {
+  use types.{error, instant};
+
+  /// kind is an open set: "timer" in this version. tag is the one given to
+  /// `schedule`.
+  record wake-event { kind: string, tag: string }
+
+  /// Wake this component at `at` (system clock, so a reminder keeps its
+  /// wall-clock time across a reboot), never before, at most `slack`
+  /// milliseconds after while the machine is awake: the system groups
+  /// wake-ups within their slack so that cores sleep. A machine asleep wakes
+  /// for it only if the platform can (platform.md). tag: 1 to 64 bytes of
+  /// [a-z0-9-]; scheduling a tag again replaces it. A wake-up is delivered
+  /// once, then forgotten.
+  schedule: async func(tag: string, at: instant, slack: u32) -> result<_, error>;
+
+  /// `not-found` if nothing is pending under that tag.
+  cancel: async func(tag: string) -> result<_, error>;
+}
+
+/// What every world imports. It is what the Rust standard library of the
+/// `wasm32-wasip3` target links into an empty component (checked with Rust
+/// 1.100: wasi:cli environment, exit, stdio, terminal; wasi:clocks), plus
+/// randomness. None of it is authority. The system links:
+///   wasi:cli stdout, stderr  the component's lines in the system log; in the
+///                            `wake-word` world, nothing (bytes are dropped)
+///   wasi:cli stdin           an empty stream
+///   wasi:cli environment     no argument; HOME=/home and TMPDIR=/tmp in the
+///                            worlds that have those preopens, nothing else
+///   wasi:cli exit            ends the instance
+///   wasi:cli terminal-*      none: no component has a terminal
+///   wasi:clocks              the monotonic clock and the system clock; the
+///                            time zone interface is unstable in WASI 0.3.2
+///                            and not offered (zones are a blob, platform.md)
+///   wasi:random              the kernel generator (D-057)
+/// Versions: imports are matched by semver compatibility, as Wasmtime's
+/// component linker does: a component built against wasi:cli@0.3.0 (Rust
+/// 1.100's standard library) links to these 0.3.2 interfaces, and the
+/// reverse. `wasm-tools component targets` matches names exactly and cannot
+/// check this.
+world base {
+  import wasi:cli/environment@0.3.2;
+  import wasi:cli/exit@0.3.2;
+  import wasi:cli/types@0.3.2;
+  import wasi:cli/stdin@0.3.2;
+  import wasi:cli/stdout@0.3.2;
+  import wasi:cli/stderr@0.3.2;
+  import wasi:cli/terminal-input@0.3.2;
+  import wasi:cli/terminal-output@0.3.2;
+  import wasi:cli/terminal-stdin@0.3.2;
+  import wasi:cli/terminal-stdout@0.3.2;
+  import wasi:cli/terminal-stderr@0.3.2;
+  import wasi:clocks/types@0.3.2;
+  import wasi:clocks/monotonic-clock@0.3.2;
+  import wasi:clocks/system-clock@0.3.2;
+  import wasi:random/random@0.3.2;
+  import wasi:random/insecure@0.3.2;
+  import wasi:random/insecure-seed@0.3.2;
 }
 
 /// A component without interface: service, server, background work.
 /// No function here assumes a screen, a GPU, a keyboard or an agent.
+/// A component may import any subset of this world, and nothing else: the
+/// installer refuses a component with another import. Granting is the
+/// manifest's (os:manifest): an import that is not granted is still linked,
+/// and every call on it fails with its interface's own refusal (wasi:sockets
+/// `access-denied`, wasi:http `HTTP-request-denied`, wasi:filesystem
+/// `access`, os:core `denied`).
 ///
-/// The same component is instantiated in two ways:
-///   - long-lived: `start` or `resume`, later `suspend`;
-///   - once per action: a fresh instance on which the system calls only
-///     `actions.invoke`. It shares no memory with the long-lived instance.
-/// The imports of an action instance are linked to match its class: `keep`
-/// is read-only when change is `none`, and every network import answers
-/// `denied` when reach is `local`.
+/// A plain `wasi:http/service` component (a server launched per request,
+/// platform.md) or `wasi:cli/command` component (a rescue tool) runs in its
+/// own WASI world, with the same linking rules for the network; it exports no
+/// action, so the agent cannot drive it.
 ///
-/// OPEN: the WASI 0.3 imports (wasi:http, wasi:sockets, clocks, random) are
-/// not listed in the worlds yet; they are granted by manifest and need the
-/// WASI packages vendored next to this one.
-/// OPEN: background wake-up by the notification service has no interface here;
-/// the document only decides that it is a manifest capability.
+/// The same component is instantiated in two ways.
+///
+/// Long-lived: `start` or `resume`, later `suspend`; `wake` and `show` on it.
+///   - wasi:filesystem preopens: "/home" is `home`, "/tmp" a collection of the
+///     ephemeral zone that ends with the instance. These are handles: rule 2
+///     holds (paths are relative to them, ".." does not leave them).
+///   - wasi:sockets and wasi:http: only with the manifest right "network",
+///     to the hosts it lists.
+///
+/// Once per action: a fresh instance on which the system calls only
+/// `actions.invoke`. It shares no memory with the long-lived instance. Its
+/// imports are linked to match the action's class (the class is the
+/// action's, from the manifest; the component's rights do not widen it):
+///   - "/home" is the request's `home`, "/tmp" ends with the instance;
+///     `keep`, "/home" and the bound objects are read-only when change is
+///     `none`;
+///   - `background` answers `denied`;
+///   - reach `local`: every network import fails;
+///   - reach `external`: wasi:sockets and name lookup fail; wasi:http
+///     `client` reaches only the hosts the manifest lists for that action,
+///     over HTTPS (the network service holds TLS, D-055, so it sees the host);
+///     when change is `none`, only the methods GET and HEAD, with no request
+///     body.
+/// OPEN (owners, security.md point 1): for reach `external` the class is
+/// not binding as it is for `local`. The rule above (GET and HEAD, no body,
+/// declared hosts, for change `none`) narrows a false class; it does not
+/// stop a server that changes state on GET, data carried in the address of
+/// a GET, or a publisher that lists its own host. The alternative is to
+/// confirm every action of reach `external`, which confirms every web fetch.
+/// The two owners decide; the manifest carries the hosts either way.
 world service {
+  include base;
+  import wasi:filesystem/types@0.3.2;
+  import wasi:filesystem/preopens@0.3.2;
+  import wasi:sockets/types@0.3.2;
+  import wasi:sockets/ip-name-lookup@0.3.2;
+  import wasi:http/types@0.3.2;
+  import wasi:http/client@0.3.2;
+
   use store.{collection};
+  use background.{wake-event};
   import keep;
+  import background;
 
   export actions;
 
@@ -160,15 +308,29 @@ world service {
   /// Called instead of `start` on a new instance when `suspend` completed
   /// before. Possibly on another device.
   export resume: async func(home: collection);
+
+  /// A wake-up asked through `background`, on the long-lived instance (the
+  /// system calls `start` or `resume` first if none runs). A component that
+  /// never schedules one implements it as a no-op.
+  export wake: async func(event: wake-event);
 }
 
-/// A component that draws with the catalogue.
-/// OPEN: the three other ways to draw (system UI library, web view, raw
-/// WebGPU) and text input have no interface in this package.
+/// A component that draws with the catalogue. Keys and text reach it through
+/// the catalogue's kinds and through `text-input` (input.wit).
+/// OPEN: the three other ways to draw (design document): the system's
+/// interface library (gpui) compiled to Wasm, a web view, raw WebGPU. Raw
+/// WebGPU waits for wasi:webgpu, a WASI proposal in phase 2 with no release
+/// in WASI 0.3.2; gpui in Wasm draws through the same WebGPU path and also
+/// needs its accessibility tree exported; a web view waits for the contract
+/// of the web engine's content process (web.md). What decides: a released
+/// wasi:webgpu, or the owners choosing to vendor a pre-release, then the
+/// compositor's buffer protocol; each path becomes a node kind of
+/// os:catalog-app, as `canvas` is.
 world app {
   include service;
   use ui.{surface};
   import exchange;
+  import text-input;
 
   // Type-only imports: the catalogue levels this world may emit.
   import os:catalog-agent/kinds@0.1.0;
@@ -181,19 +343,44 @@ world app {
 }
 
 /// The agent. It has no authority of its own: everything it can do comes
-/// from `scope`, and nothing survives the task.
+/// from `scope` and from what the user handed over in `request`, and nothing
+/// survives the task (no `keep`, no filesystem, no network: a remote model
+/// is reached by the system, through `inference`).
 world agent {
-  use tasks.{task};
+  include base;
+  use tasks.{task, request};
   use ui.{surface};
 
   import os:catalog-agent/kinds@0.1.0;
   import inference;
   import memory;
   import audio;
+  import entity;
+  import accessibility;
 
-  /// One user request. `request` is the user's own words (origin "user").
-  /// `overlay` only accepts agent-level kinds.
-  /// OPEN: objects the user hands over with the request (dropped on the
-  /// agent bar) have no path yet; they would be bindings on this call.
-  export handle: async func(request: string, scope: task, overlay: surface);
+  /// One user request. `overlay` only accepts agent-level kinds. The task
+  /// starts with the marks of the request's parts (see `tasks.request`).
+  export handle: async func(request: request, scope: task, overlay: surface);
+}
+
+/// The always-on wake-word detector: the microphone as only input, a signal
+/// as only output, no network and no storage (agent.md). It imports `base`
+/// only so that a standard-library build links; its stdout and stderr go
+/// nowhere. What leaks is the timing of detections, to the system only.
+world wake-word {
+  include base;
+
+  /// `audio`: the microphone, 16 kHz, mono, signed 16-bit samples, after
+  /// echo cancellation. Returns one number per detection: the index, counted
+  /// from the first sample of `audio`, of the sample where the wake word
+  /// ends. Ends when `audio` ends. The system routes the following speech to
+  /// the recogniser; the detector never sees what the agent hears.
+  export detect: async func(audio: stream<s16>) -> stream<u64>;
+}
+
+/// An input engine (input method, virtual keyboard, emoji picker): no
+/// network (ui.md). Its storage is the `home` handed to each activation.
+world input-engine {
+  include base;
+  export engine;
 }

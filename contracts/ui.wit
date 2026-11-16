@@ -42,8 +42,10 @@ interface ui {
     /// JSON; "null" when the event has no value.
     value: string,
     objects: list<binding>,
-    /// Who the value comes from: "user" for what the user typed or chose,
-    /// the applet's or the action's publisher for what they sent.
+    /// Who the value comes from: "user" for what the user typed, dictated or
+    /// chose, the applet's or the action's publisher for what they sent. A
+    /// value pasted keeps the provenance of the pasted item (see
+    /// `exchange.copy`), marks included.
     provenance: provenance,
   }
 
@@ -52,7 +54,10 @@ interface ui {
     /// 1024 nodes per call. The system checks every update: known kind
     /// allowed on this surface (`unsupported`), props matching the kind,
     /// existing parent, actions within the task scope, caps (`invalid`,
-    /// `too-large`). A rejected update changes nothing.
+    /// `too-large`), and on the agent's overlay the rules that keep the model
+    /// from imitating the system (icon names `system` and `untrusted`,
+    /// secret fields: see os:catalog-agent). A rejected update changes
+    /// nothing.
     update: async func(nodes: list<node>) -> result<_, error>;
 
     /// Removes the nodes and their descendants.
